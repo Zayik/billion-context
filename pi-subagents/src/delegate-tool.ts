@@ -609,42 +609,30 @@ export function resolvePerCallTimeoutMs(raw: number | undefined, fallbackMs: num
 }
 
 const DelegateParams = Type.Object({
-  agent: Type.String({
-    description: `Role of the delegate. One of: ${AGENT_NAMES.join(", ")}. See tool description for what each does.`,
-  }),
+  agent: Type.String({ description: `One of: ${AGENT_NAMES.join(", ")}.` }),
   task: Type.Optional(
-    Type.String({
-      description: "The self-contained task to hand off. State purpose, scope, and any constraints explicitly. Required for fresh runs; optional when resuming via resumeFrom (if given, it is appended as extra guidance for this attempt).",
-    }),
+    Type.String({ description: "Self-contained brief: goal, scope, and the findings it needs. Optional when resuming." }),
   ),
   resumeFrom: Type.Optional(
-    Type.String({
-      description: 'Resume a previously failed/cancelled run: the new delegate restores that run\'s session (original task, tool calls already made, partial findings) and continues from where it left off instead of starting over. Pass the earlier runId. When resuming, `task` is optional — if given, it is appended as extra guidance for this attempt. (pi host only.)',
-    }),
+    Type.String({ description: "runId of a failed or cancelled run to continue from its saved session instead of starting over (pi only)." }),
   ),
   cwd: Type.Optional(
-    Type.String({ description: "Working directory for the delegate (default: current project dir)." }),
+    Type.String({ description: "Working directory, e.g. a worktree (default: current project dir)." }),
   ),
   model: Type.Optional(
-    Type.String({ description: 'Model override as "provider/id". Default: this role\'s configured model (delegate.agents.<role>.model), else inherit the current model.' }),
+    Type.String({ description: 'Model override as "provider/id" (default: the role\'s configured model, else the current one).' }),
   ),
   thinkingLevel: Type.Optional(
-    Type.String({ description: `Per-call thinking-level override: ${VALID_THINKING_LEVELS.join("|")}. Default: this role's configured level, else the global delegate.thinkingLevel, else Pi's own default.` }),
+    Type.String({ description: `Thinking-level override: ${VALID_THINKING_LEVELS.join("|")}.` }),
   ),
   async: Type.Optional(
-    Type.Boolean({
-      description: "If true (default), return immediately with a runId. In long-lived sessions (interactive/rpc) a short notification is injected into chat when the delegate finishes; in one-shot sessions (print/json, e.g. `pi -p` / SDK) async auto-downgrades to sync and the result is returned here. If false, always block and return the output here.",
-    }),
+    Type.Boolean({ description: "Default true: return a runId now and deliver the reply as a notification (sync in one-shot sessions). false: block and return the reply." }),
   ),
   showThinking: Type.Optional(
-    Type.Boolean({
-      description: "If true, the delegate's thinking deltas are also written to the live activity file (default: false — only tool activity is shown).",
-    }),
+    Type.Boolean({ description: "Also log the delegate's thinking to its activity file (default false)." }),
   ),
   timeoutMinutes: Type.Optional(
-    Type.Number({
-      description: `Per-call override for this run's hard wall-clock timeout, in minutes (e.g. 90). When async=true it overrides the async hard limit; when async=false it overrides the sync limit. Omit to use the configured default (delegate.asyncTimeoutMinutes / syncTimeoutMinutes via acp.json or env). Capped at ${MAX_PER_CALL_TIMEOUT_MINUTES}m (24h); the no-output (idle) watchdog is unaffected.`,
-    }),
+    Type.Number({ description: `Hard timeout override for this run, in minutes (max ${MAX_PER_CALL_TIMEOUT_MINUTES}).` }),
   ),
 });
 
@@ -658,7 +646,7 @@ const WaitParams = Type.Object({
   runId: Type.String({ description: "The runId returned by acp_delegate to wait for." }),
   timeout: Type.Optional(
     Type.Integer({
-      description: `Maximum time to block waiting for the result, in milliseconds. Default ${WAIT_TIMEOUT_MS_DEFAULT} (10s); max ${WAIT_TIMEOUT_MS_MAX} (300s). Values below 1000 are treated as seconds (so 180 means 180s, not 180ms). If the delegate does not finish in time, returns a wait-timeout notice; the delegate keeps running in the background — do NOT keep waiting or retry; go do other work, and a completion notification will still be injected when it completes.`,
+      description: `Max wait in ms (default ${WAIT_TIMEOUT_MS_DEFAULT}, max ${WAIT_TIMEOUT_MS_MAX}; values below 1000 count as seconds).`,
     }),
   ),
 });
@@ -703,50 +691,34 @@ const agentListLine = (name: string): string => {
   const def = AGENTS[name];
   if (!def) return "";
   const blurb: Record<string, string> = {
-    reviewer: "read-only code review (bugs/risks, file:line)",
-    researcher: "read-only codebase investigation",
-    worker: "make code changes (read+edit+write)",
+    reviewer: "an independent review of your work",
+    researcher: "a large lookup whose raw material you will not need afterwards; returns only the answer",
+    worker: "sizable, independent edits on disjoint files that run in parallel with other work, each in its own worktree",
   };
-  return `  • ${name} - ${blurb[name]} [tools: ${def.tools}${def.restricted ? " + ACP context tools" : ""}]`;
+  return `• ${name} - ${blurb[name]}${def.restricted ? " (read-only)" : ""}`;
 };
 
 export function makeDelegateTool(pi: ExtensionAPI): ToolDefinition<typeof DelegateParams, DelegateRenderMeta> {
   ensureHostNotificationHandlers(pi);
   const maxConcurrent = delegatePolicy.maxConcurrent;
   const concurrencyNote = Number.isFinite(maxConcurrent)
-    ? `\n• Concurrency limit: at most ${maxConcurrent} background delegate(s) run at once; extra launches stay QUEUED and start automatically as slots free. Set delegate.maxConcurrent in acp.json (or PI_ACP_DELEGATE_MAX_CONCURRENT) to change it.`
+    ? ` At most ${maxConcurrent} run at once; extra launches queue.`
     : "";
   return {
     name: "acp_delegate",
     label: "ACP Delegate",
-    description: `Hand a self-contained task to a fresh sub-agent running in a clean context (its own pi process). Use to get focused review/investigation/implementation without polluting the main context, or to run several tasks concurrently.
-
-Agents (pick by name):
+    description: `Run a task in a fresh sub-agent (its own pi process, clean context) and get its reply back. Default to doing the work yourself. Delegate only one of these:
 ${AGENT_NAMES.map(agentListLine).join("\n")}
 
-Behavior:
-• async=true (default): returns immediately with a runId. The delegate runs in the background. Call acp_delegate_wait({ runId }) to block for its result (up to a timeout); if you let the timeout lapse, or never call wait, a short completion notification (status + file path) is still injected into this chat when it finishes — unless you already read the result file after it finished, in which case the notification is skipped (you have the result). In one-shot sessions (print/json) async auto-downgrades to sync so the result is returned inline within the same turn. Call acp_delegate again to launch more runs in parallel.${concurrencyNote}
-• async=false: blocks until the delegate finishes and returns its reply inline (a long reply is cut, with the full text in a file).
-• timeoutMinutes: optionally set a per-task hard timeout (minutes) for this run when you know roughly how long it needs — overrides the configured default (capped at 24h).
+The delegate does NOT see this conversation. Brief it with what you already know (decisions, file:line findings, constraints) instead of pointers it must re-read, and name its scope. Do not work on that scope yourself while it runs.
 
-There is NO non-blocking status tool. To get a delegate's result, call acp_delegate_wait with the runId — it blocks until the run finishes or the timeout elapses. Use acp_delegate_cancel only to stop a run you no longer want.
-
-Failure & resume:
-• Failed and cancelled runs KEEP their output files (partial reply + activity log) — read them to see what the delegate produced before dying.
-• To continue a failed/cancelled run instead of re-dispatching it, call acp_delegate again with resumeFrom: "<runId>" (pi host only): the new run restores the earlier session (history + partial work) and picks up where it left off.
-
-The delegate runs in its own clean pi process — it does NOT see this conversation's context. Give it everything it needs (paths, goals, constraints). Its reply comes back inline; the full text is also saved to a file.`,
+async=true (default) returns a runId; the reply arrives as a completion notification, or call acp_delegate_wait. async=false blocks and returns the reply.${concurrencyNote}`,
     promptSnippet:
-      'acp_delegate({ agent: "reviewer", task: "Review src/index.ts for race conditions" })',
+      'acp_delegate({ agent: "reviewer", task: "Review git diff main...HEAD against docs/spec.md" })',
     promptGuidelines: [
-      "Delegate to get a focused result in a clean context, or to parallelize independent work.",
-      "The sub-agent has NO access to this conversation — write a fully self-contained task.",
-      "Prefer async=true and launch several; results arrive back automatically when each finishes.",
-      "A FAILED notification (⚠️) means that task produced no usable result — read the excerpt and the output files, then decide whether to re-dispatch it before wrapping up.",
-      "A failed/cancelled run keeps its output files and can be resumed with resumeFrom: \"<runId>\" — prefer resuming over re-dispatching when the earlier work is worth keeping.",
-      "For changes you must apply yourself, delegate read-only investigation (reviewer/researcher) and keep the main context as the sole writer.",
-      "Route by task kind: review/audit code → reviewer (never use worker to review), explore unfamiliar code → researcher, making changes → worker.",
-      "A delegate's findings live in its result file — read that file instead of re-running exploration a child already did.",
+      "Do the work in the main loop. Use acp_delegate only for an independent review, a large disposable lookup, or parallel edits on disjoint files.",
+      "Brief a delegate with your findings so it does not re-read what you already read; name its scope and stay off it while it runs.",
+      "A FAILED ⚠️ delegate produced nothing usable: read its excerpt, then resume it (resumeFrom) or re-dispatch it before you finish.",
     ],
     parameters: DelegateParams,
     renderShell: "self",
@@ -1335,12 +1307,9 @@ export function makeDelegateWaitTool(pi: ExtensionAPI): ToolDefinition<typeof Wa
     name: "acp_delegate_wait",
     label: "ACP Delegate Wait",
     description:
-      "Block until an acp_delegate async run finishes, then return its result (status + the reply inline). This is the ONLY way to fetch a delegate's result — there is no non-blocking status tool, so you cannot poll. Default timeout is 10s (max 300s). If the delegate finishes within the timeout, its result is returned here (same format as a sync delegate). If it times out, the run keeps going in the background and you should STOP waiting — do not retry in a loop; go do other work, and a completion notification will still be injected into the chat when it finishes.",
+      "Block until an async acp_delegate run finishes and return its reply. If it times out, the run keeps going: do not retry; do other work and its completion notification will reach you.",
     promptSnippet: 'acp_delegate_wait({ runId: "del_..." })',
-    promptGuidelines: [
-      "Use this to fetch a delegate's result instead of polling a status tool.",
-      "If it times out, do NOT retry — go do other work and let the background notification reach you.",
-    ],
+    promptGuidelines: [],
     parameters: WaitParams,
     renderShell: "self",
     renderCall: (args, theme) => renderDelegateCall({ task: args.runId }, theme),
