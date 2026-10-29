@@ -12,6 +12,7 @@ import {
   setDelegateNotifyIfRead,
   markDelegateResultRead,
   markDelegateRunReadByCommand,
+  delegationAllowedAtDepth,
 } from "./delegate-tool.js";
 import {
   DEFAULT_DELEGATE_POLICY,
@@ -61,6 +62,7 @@ export function createSubagentsExtension(inline?: SubagentsAdapterConfig): Exten
     const state = {
       policy: DEFAULT_DELEGATE_POLICY as DelegatePolicy,
       stoodDown: false,
+      depthCapped: false,
       delegatePrompt: inline?.delegatePrompt,
     };
     let standDownWarned = false;
@@ -154,7 +156,8 @@ export function createSubagentsExtension(inline?: SubagentsAdapterConfig): Exten
       } catch (e) {
         logThrow("config", e, { sid, phase: "session_start" });
       }
-      if (state.policy.enabled && !state.stoodDown) {
+      state.depthCapped = !delegationAllowedAtDepth(state.policy.maxDepth);
+      if (state.policy.enabled && !state.stoodDown && !state.depthCapped) {
         pi.registerTool(makeDelegateTool(pi));
         pi.registerTool(makeDelegateWaitTool(pi));
         pi.registerTool(makeDelegateCancelTool(pi));
@@ -179,7 +182,7 @@ export function createSubagentsExtension(inline?: SubagentsAdapterConfig): Exten
 
     pi.on("before_agent_start", (event) => {
       if (isEmbedded()) return;
-      if (!state.policy.enabled || state.stoodDown) return;
+      if (!state.policy.enabled || state.stoodDown || state.depthCapped) return;
       const text = state.delegatePrompt !== undefined ? state.delegatePrompt : ACP_DELEGATE_PROMPT;
       if (text === null) return;
       return addPromptSection(event, DELEGATE_PROMPT_SECTION, text);
@@ -205,6 +208,7 @@ export {
   setDelegateNotifyIfRead,
   markDelegateResultRead,
   markDelegateRunReadByCommand,
+  delegationAllowedAtDepth,
   type RunStatus,
   type FleetRunView,
 } from "./delegate-tool.js";

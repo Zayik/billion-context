@@ -848,7 +848,7 @@ Top-level keys that control how the proxy listens and behaves globally.
     "enabled": true,              // master switch; false (or "subagents": false) removes tools+prompt+shortcut (new session)
     "forceEnable": false,        // keep acp_delegate even when a project-scope pi-subagents install is detected (#415)
     "displayUsage": "separate",  // "separate" (own footer block) | "merged" (folded into tool-result usage)
-    "maxDepth": 2,               // nesting depth cap, propagated to children
+    "maxDepth": 1,               // nesting depth cap, propagated to children (default 1: children register no delegate tools)
     "syncTimeoutMinutes": 5,     // hard timeout for sync delegates; 0/null disables
     "idleTimeoutMinutes": 5,     // idle watchdog for async delegates; 0/null disables (warns)
     "asyncTimeoutMinutes": 30,   // hard limit for async delegates; 0/null disables

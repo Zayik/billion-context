@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot } from "../src/delegate-tool.js";
+import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, delegationAllowedAtDepth, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot } from "../src/delegate-tool.js";
 import { DEFAULT_DELEGATE_POLICY } from "../src/config.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -1039,14 +1039,14 @@ test("depth gate honors configured maxDepth (rejection paths, no spawn)", async 
   const textOf = (res: Awaited<ReturnType<typeof tool.execute>>): string => (res.content[0] as { text?: string }).text ?? "";
   try {
     setDelegatePolicy(DEFAULT_DELEGATE_POLICY);
-    process.env.PI_ACP_DELEGATE_DEPTH = "2";
-    let res = await tool.execute("tc-depth-a", { agent: "researcher", task: "x" }, undefined, undefined, ctx);
-    assert.match(textOf(res), /nesting limit reached \(depth 2, max 2\)/, "default maxDepth 2 rejects depth 2");
-
-    setDelegatePolicy({ ...DEFAULT_DELEGATE_POLICY, maxDepth: 1 });
     process.env.PI_ACP_DELEGATE_DEPTH = "1";
+    let res = await tool.execute("tc-depth-a", { agent: "researcher", task: "x" }, undefined, undefined, ctx);
+    assert.match(textOf(res), /nesting limit reached \(depth 1, max 1\)/, "default maxDepth 1 rejects depth 1");
+
+    setDelegatePolicy({ ...DEFAULT_DELEGATE_POLICY, maxDepth: 2 });
+    process.env.PI_ACP_DELEGATE_DEPTH = "2";
     res = await tool.execute("tc-depth-b", { agent: "researcher", task: "x" }, undefined, undefined, ctx);
-    assert.match(textOf(res), /nesting limit reached \(depth 1, max 1\)/, "maxDepth 1 rejects depth 1");
+    assert.match(textOf(res), /nesting limit reached \(depth 2, max 2\)/, "maxDepth 2 rejects depth 2");
 
     setDelegatePolicy({ ...DEFAULT_DELEGATE_POLICY, maxDepth: 3 });
     process.env.PI_ACP_DELEGATE_DEPTH = "3";
@@ -1056,6 +1056,23 @@ test("depth gate honors configured maxDepth (rejection paths, no spawn)", async 
     if (prev === undefined) delete process.env.PI_ACP_DELEGATE_DEPTH;
     else process.env.PI_ACP_DELEGATE_DEPTH = prev;
     setDelegatePolicy(DEFAULT_DELEGATE_POLICY);
+  }
+});
+
+test("delegationAllowedAtDepth: the main agent may delegate, a child at the default cap may not", () => {
+  const prev = process.env.PI_ACP_DELEGATE_DEPTH;
+  try {
+    delete process.env.PI_ACP_DELEGATE_DEPTH;
+    assert.equal(DEFAULT_DELEGATE_POLICY.maxDepth, 1, "default forbids nesting");
+    assert.equal(delegationAllowedAtDepth(DEFAULT_DELEGATE_POLICY.maxDepth), true, "depth 0 (main agent) delegates");
+    process.env.PI_ACP_DELEGATE_DEPTH = "1";
+    assert.equal(delegationAllowedAtDepth(DEFAULT_DELEGATE_POLICY.maxDepth), false, "depth 1 child is at the cap");
+    assert.equal(delegationAllowedAtDepth(2), true, "maxDepth 2 lets a depth-1 child delegate once more");
+    process.env.PI_ACP_DELEGATE_DEPTH = "not-a-number";
+    assert.equal(delegationAllowedAtDepth(5), false, "an unparseable depth never delegates");
+  } finally {
+    if (prev === undefined) delete process.env.PI_ACP_DELEGATE_DEPTH;
+    else process.env.PI_ACP_DELEGATE_DEPTH = prev;
   }
 });
 
