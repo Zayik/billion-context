@@ -35,6 +35,9 @@ const EOF_GRACE_MS = 10_000;
 const SETTLED_GRACE_MS = 10_000;
 const KILL_GRACE_MS = 10_000;
 const RESULT_SUMMARY_CHARS = 500;
+// A completed run's reply is handed back inline up to this size, so the caller
+// gets a compact result without an extra read of the result file.
+export const INLINE_RESULT_CHARS = 6000;
 export const OUT_DIR = join(tmpdir(), "acp-delegate");
 // Completion notifications are committed at commit boundaries, never on a
 // fixed timer (#2301): while the host is BUSY, pending runs stay revocable
@@ -723,7 +726,7 @@ ${AGENT_NAMES.map(agentListLine).join("\n")}
 
 Behavior:
 • async=true (default): returns immediately with a runId. The delegate runs in the background. Call acp_delegate_wait({ runId }) to block for its result (up to a timeout); if you let the timeout lapse, or never call wait, a short completion notification (status + file path) is still injected into this chat when it finishes — unless you already read the result file after it finished, in which case the notification is skipped (you have the result). In one-shot sessions (print/json) async auto-downgrades to sync so the result is returned inline within the same turn. Call acp_delegate again to launch more runs in parallel.${concurrencyNote}
-• async=false: blocks until the delegate finishes. The full output is saved to a file; the tool result contains the path. Use the \`read\` tool to open the file for the complete content.
+• async=false: blocks until the delegate finishes and returns its reply inline (a long reply is cut, with the full text in a file).
 • timeoutMinutes: optionally set a per-task hard timeout (minutes) for this run when you know roughly how long it needs — overrides the configured default (capped at 24h).
 
 There is NO non-blocking status tool. To get a delegate's result, call acp_delegate_wait with the runId — it blocks until the run finishes or the timeout elapses. Use acp_delegate_cancel only to stop a run you no longer want.
@@ -732,7 +735,7 @@ Failure & resume:
 • Failed and cancelled runs KEEP their output files (partial reply + activity log) — read them to see what the delegate produced before dying.
 • To continue a failed/cancelled run instead of re-dispatching it, call acp_delegate again with resumeFrom: "<runId>" (pi host only): the new run restores the earlier session (history + partial work) and picks up where it left off.
 
-The delegate runs in its own clean pi process — it does NOT see this conversation's context. Give it everything it needs (paths, goals, constraints). Full results always go to a file so the chat context stays small.`,
+The delegate runs in its own clean pi process — it does NOT see this conversation's context. Give it everything it needs (paths, goals, constraints). Its reply comes back inline; the full text is also saved to a file.`,
     promptSnippet:
       'acp_delegate({ agent: "reviewer", task: "Review src/index.ts for race conditions" })',
     promptGuidelines: [
@@ -766,6 +769,7 @@ export function formatRunResult(run: DelegateRun): string {
     run.status === "completed"
       ? `Delegate **${run.agent}** (runId \`${run.runId}\`) completed (${exit})${timeoutNote}${remainingLineForWait(run.runId)}`
       : `Delegate **${run.agent}** (runId \`${run.runId}\`) ${run.status === "failed" ? "FAILED ⚠️" : run.status} (${exit})${timeoutNote}${remainingLineForWait(run.runId)}`;
+  if (run.status === "completed") return formatCompletedPayload(header, run.result?.file ?? "", run.task, run.result?.body);
   return formatPayload(header, run.result?.file ?? "", run.task, run.result?.body, run.status === "failed" ? run.activityFile : undefined);
 }
 
@@ -974,7 +978,7 @@ function commitAtTurnEnd(pi: ExtensionAPI, st: HostNotificationState): void {
       r.agent, r.runId, r.task, r.status,
       r.result?.code ?? null, r.result?.file ?? "", r.timedOut,
       r.usage, mode, r.usageReported,
-      r.status === "failed" ? r.result?.body : undefined,
+      r.result?.body,
       r.status === "failed" ? r.activityFile : undefined,
       r.exitSignal,
     );
@@ -1072,7 +1076,7 @@ function flushHostNotifications(pi: ExtensionAPI): void {
       r.agent, r.runId, r.task, r.status,
       r.result?.code ?? null, r.result?.file ?? "", r.timedOut,
       r.usage, mode, r.usageReported,
-      r.status === "failed" ? r.result?.body : undefined,
+      r.result?.body,
       r.status === "failed" ? r.activityFile : undefined,
       r.exitSignal,
     );
@@ -1118,7 +1122,8 @@ export function formatBatchRunSection(run: DelegateRun): string {
   const status = failed ? "FAILED ⚠️" : "completed";
   const timeoutNote = run.timedOut ? ` (timed out: ${run.timedOut})` : "";
   const header = `[acp_delegate ${status}] **${run.agent}** (runId \`${run.runId}\`, ${exitLabel(run.result?.code ?? null, run.exitSignal)})${timeoutNote}`;
-  return formatPayload(header, run.result?.file ?? "", run.task, failed ? run.result?.body : undefined, failed ? run.activityFile : undefined);
+  if (!failed) return formatCompletedPayload(header, run.result?.file ?? "", run.task, run.result?.body);
+  return formatPayload(header, run.result?.file ?? "", run.task, run.result?.body, run.activityFile);
 }
 
 /** Build the merged multi-run notification text. `fromQueue` distinguishes
@@ -1330,7 +1335,7 @@ export function makeDelegateWaitTool(pi: ExtensionAPI): ToolDefinition<typeof Wa
     name: "acp_delegate_wait",
     label: "ACP Delegate Wait",
     description:
-      "Block until an acp_delegate async run finishes, then return its result (status + file path). This is the ONLY way to fetch a delegate's result — there is no non-blocking status tool, so you cannot poll. Default timeout is 10s (max 300s). If the delegate finishes within the timeout, its result is returned here (same format as a sync delegate). If it times out, the run keeps going in the background and you should STOP waiting — do not retry in a loop; go do other work, and a completion notification will still be injected into the chat when it finishes.",
+      "Block until an acp_delegate async run finishes, then return its result (status + the reply inline). This is the ONLY way to fetch a delegate's result — there is no non-blocking status tool, so you cannot poll. Default timeout is 10s (max 300s). If the delegate finishes within the timeout, its result is returned here (same format as a sync delegate). If it times out, the run keeps going in the background and you should STOP waiting — do not retry in a loop; go do other work, and a completion notification will still be injected into the chat when it finishes.",
     promptSnippet: 'acp_delegate_wait({ runId: "del_..." })',
     promptGuidelines: [
       "Use this to fetch a delegate's result instead of polling a status tool.",
@@ -2022,7 +2027,7 @@ export function formatSyncResult(agent: string, runId: string, task: string, r: 
   const status = r.timedOut ? "timed out" : r.code === 0 && !noOutput ? "completed" : "FAILED ⚠️";
   const header = `Delegate **${agent}** ${status} (runId \`${runId}\`, ${exitLabel(r.code, r.signal)}).`;
   if (r.code === 0 && !r.timedOut && !noOutput) {
-    return formatPayload(header, file, task);
+    return formatCompletedPayload(header, file, task, r.stdout);
   }
   const body = r.timedOut ? "(timed out)" : r.code === 0 ? NO_FINAL_OUTPUT_BODY : (r.stderr.trim() || "(no stderr)");
   return formatPayload(header, file, task, body);
@@ -2142,10 +2147,11 @@ function buildInjectText(
 
   const closing = failed
     ? "This delegate did NOT complete its task — its result is missing from your work. Read the error excerpt (and the result file if present), then decide whether to re-dispatch the task before wrapping up. This is an automated system notification, NOT a user message."
-    : "This is an automated system notification, NOT a user message. Read the result file if you need the details, then continue your original task; do not treat this as a new user request. It ends no task and grants no new scope — if your objective is still open, resume it from your recorded progress.";
+    : "This is an automated system notification, NOT a user message. Fold the result below into your work, then continue your original task; do not treat this as a new user request. It ends no task and grants no new scope — if your objective is still open, resume it from your recorded progress.";
   const header = `[acp_delegate ${statusLabel}] **${agent}** (runId \`${runId}\`, ${exitLabel(code, signal)})${timeoutNote}${remainingLine}${usageNote} ${closing}`;
   const { text: recoveryText, covered } = buildRecoveryNotice(Array.from(runs.values()), runId);
-  const text = formatPayload(header, file, task, failed ? body : undefined, failed ? activityFile : undefined) + (recoveryText ? `\n\n${recoveryText}` : "");
+  const payload = failed ? formatPayload(header, file, task, body, activityFile) : formatCompletedPayload(header, file, task, body);
+  const text = payload + (recoveryText ? `\n\n${recoveryText}` : "");
   return { text, covered };
 }
 
@@ -2286,6 +2292,24 @@ function formatPayload(header: string, file: string, task: string, body?: string
   }
   if (body) {
     lines.push("", "Output:", "~~~", truncate(body, RESULT_SUMMARY_CHARS), "~~~");
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/** Payload for a completed run: the reply itself, inline, so the caller
+ *  needs no extra read. Only a reply past INLINE_RESULT_CHARS is cut, and
+ *  then the result file holds the rest. Without a reply, falls back to the
+ *  file pointer. */
+export function formatCompletedPayload(header: string, file: string, task: string, reply?: string): string {
+  const text = reply?.trim() ?? "";
+  if (!text) return formatPayload(header, file, task);
+  const cut = text.length > INLINE_RESULT_CHARS;
+  const lines: string[] = [header, "", `Task: ${truncate(task, 160)}`, "", "Result:", "~~~", cut ? truncate(text, INLINE_RESULT_CHARS) : text, "~~~"];
+  if (file) {
+    lines.push(cut
+      ? `Truncated at ${INLINE_RESULT_CHARS} chars. Full result: \`${file}\` (read it only if you need the rest).`
+      : `The result above is complete (also saved at \`${file}\`); no need to read the file.`);
   }
   lines.push("");
   return lines.join("\n");
