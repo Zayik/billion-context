@@ -1741,8 +1741,8 @@ export interface PiSubagentsFileConfig {
     maxConcurrent?: number;
     /** Global default thinking level (off|minimal|low|medium|high|xhigh|max). */
     thinkingLevel?: string;
-    /** Per-role defaults keyed by role (reviewer/researcher/worker/planner/
-     *  oracle or custom): { model: "provider/id", thinkingLevel: "…" }. */
+    /** Per-role defaults keyed by role (reviewer/researcher/worker or
+     *  custom): { model: "provider/id", thinkingLevel: "…" }. */
     agents?: Record<string, { model?: string; thinkingLevel?: string }>;
     /** "skip" (default) — suppress the completion notification when the
      *  model already read the result file; "always" — always inject. */
