@@ -164,7 +164,7 @@ Merges first, then folds, then as-tool changes. With no traffic data, the order 
 lowest risk up.
 
 - [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); kept
-- [ ] 2. fold `worker` (remove the role; the main agent edits itself) · variant: · compared with: · result:
+- [x] 2. fold `worker` (remove the role; the main agent edits itself) · variant: v2 · compared with: v1 · result: holds (10/11 both sides); decision pending
 - [ ] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: · compared with: · result:
 - [ ] 4. merged investigator as-tool: structured result · variant: · compared with: · result:
 
@@ -223,6 +223,36 @@ Tokens used next to the estimate: zero for both (scripted model). The figures me
 - **Compat:** `delegate.agents.planner` / `delegate.agents.oracle` config now silently stops applying, and calls naming those roles get "Unknown agent". This is open owner question 1, unresolved; no aliases were added.
 - **Decision (who, when):** keep: the person, 2026-10-28 ("follow the two recommendations": keep and go on to item 2, after a free latency rerun on both sides).
 - **Left open after the decision:** issue + PR not opened yet (AGENTS.md requires both). Owner question 1.
+
+### Item 2: fold `worker` (variant `v2`, branch `2026-10-28_fold-worker-delegate-role`, commit b5de41f1, stacked on item 1)
+
+Comparison with `v1` (`compare.py ... v1 v2 --exclude main --exclude worker`):
+
+| | v1 | v2 | change |
+| --- | ---: | ---: | ---: |
+| tasks complete | 10/11 | 10/11 | 0 |
+| latency per task (s) | 4.1 | 2.8 | −32% (v1's first run was the noisy one; baseline was 2.8) |
+| model calls per task | 4.4 | 4.2 | −4% |
+| input tokens per task | 34,199 | 32,458 | −5% |
+
+Tokens used next to the estimate: zero (scripted model).
+
+- **Prompt sort (step 3):** "You are a precise implementer" is persona, so it's deleted. "Minimal, focused, check AGENTS.md first" and "summarize what you changed, don't expand scope" are things pi's main agent already does: pi loads AGENTS.md itself (#815), and its own prompt owns scope. **No skill and no new tools**, since main already has read/edit/write/bash. So there is no with/without-skill run.
+- **Tasks that changed score:** none. t07 fails on both sides (known gap).
+- **Tasks that changed route:** only t05-edit, as intended. It went from main+worker (4 calls, 34,448 tokens) to main alone (2 calls, 16,289 tokens), and its write landed in the sandbox exactly as expected. No other route moved.
+- **Edited in the main agent's prompt and tool list:**
+  - `acp_delegate` description: the worker line is gone, and "focused review/investigation/implementation" became "focused review/investigation".
+  - promptGuidelines: the sole-writer line became "Delegates are read-only: make code changes yourself and delegate only investigation (reviewer/researcher); the main context is the sole writer." The routing line lost "(never use worker to review)" and "making changes → worker".
+  - Effect: main's first call went from 7,470 to 7,432 tokens (−38 per call; −92 against the baseline).
+- **Also edited:** config doc comments (both `config.ts` files), pi-subagents README en/zh (worker row removed, plus "There is no writing role: the main agent makes code changes itself"), and `tests/e2e/e2e-delegate-notify.test.ts`, whose generic probe dispatch moved from `worker` to `researcher` (gated e2e; not run, since its `spawn("pi")` can't start pi's shell shim on Windows). Unit tests that dispatch through `execute()` moved to `reviewer` (widget-refresh, fleet-inspector). Version 0.2.3 → 0.2.4 (package.json + root lockfile).
+- **Checked with no model:**
+  - `npm --prefix pi-subagents test` 262/262. The roster test now also rejects `worker`, and it fails on the old code.
+  - Typecheck clean; `pi-subagents-wiring` 18/18, `pi-subagent-channel` 15/15.
+- **Kept unused until keep:** the unrestricted-toolset branch in `buildChildArgs` (`delegate-tool.ts`, "Worker and unknown agents are left on Pi's full default toolset") and its unit tests ("omits --tools for worker role", etc.). No model can reach it: `execute()` rejects unknown agents first. Delete them after keep; that is the cleanup commit.
+- **Skipped or not measured:**
+  - Cost creep from real edits now landing in main's own context: the scripted edit is one tiny write. This is the main risk of the fold, and it needs a live model.
+  - Shortcut and wrong pick: unmeasured, same as before.
+- **Decision (who, when):** pending.
 
 ## Open questions for owners
 
