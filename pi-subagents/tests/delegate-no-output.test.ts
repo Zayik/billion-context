@@ -27,6 +27,7 @@ test("formatSyncResult: normal completed run keeps the plain payload", () => {
   assert.match(out, /completed/);
   assert.doesNotMatch(out, /FAILED/);
   assert.doesNotMatch(out, /NO final reply text/);
+  assert.match(out, /Result:\n~~~\nthe answer\n~~~/, "completed sync reply comes back inline");
 });
 
 test("formatSyncResult: nonzero exit stays on the stderr failure path", () => {
