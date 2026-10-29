@@ -91,7 +91,7 @@ test("buildListRows shows live duration for running, terminal label + tokens oth
 });
 
 test("renderListBody is width-safe, marks selection, handles empty list", () => {
-  const rows: ListRow[] = buildListRows([mkView(), mkView({ runId: "del_y", agent: "oracle" })], Date.now());
+  const rows: ListRow[] = buildListRows([mkView(), mkView({ runId: "del_y", agent: "researcher" })], Date.now());
   const lines = renderListBody(rows, 1, plainTheme, 30);
   assertWidthSafe(lines, 30);
   assert.equal(lines.length, rows.length);
@@ -220,7 +220,7 @@ test("fleetRunsSnapshot maps real spawns: failed run fields, running-first order
   try {
     // 1) failing child → failed run with mapped fields
     process.env.PI_CLI_PATH = failScript;
-    const res = await tool.execute("tc-fleet-fail", { agent: "oracle", task: "will fail", cwd: workDir, async: true }, undefined, undefined, mockCtx(workDir));
+    const res = await tool.execute("tc-fleet-fail", { agent: "researcher", task: "will fail", cwd: workDir, async: true }, undefined, undefined, mockCtx(workDir));
     const launch = (res.content[0] as { text?: string }).text ?? "";
     const failId = /`(del_[a-z0-9_]+)`/.exec(launch)?.[1];
     assert.ok(failId, `runId in launch message: ${launch}`);
@@ -232,7 +232,7 @@ test("fleetRunsSnapshot maps real spawns: failed run fields, running-first order
     assert.ok(snap, "failed run present in snapshot");
     assert.equal(snap!.status, "failed");
     assert.equal(snap!.exitLabel, "exit 1");
-    assert.equal(snap!.agent, "oracle");
+    assert.equal(snap!.agent, "researcher");
     assert.equal(snap!.task, "will fail");
     assert.ok(existsSync(snap!.replyFile), `reply file retained: ${snap!.replyFile}`);
     assert.ok(snap!.activityFile && snap!.activityFile.endsWith(".activity"), "async pi host has activity file");
