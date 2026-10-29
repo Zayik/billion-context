@@ -299,6 +299,20 @@ Comparison with `v2` (`compare.py ... v2 v3 --exclude main`):
 - **What this does not fix** (revisit at the next model upgrade): the reviewer keeps its own prompt; each call still hands back a summary that loses detail; each call is a nested model loop (latency); and main must `read` the file to see the conclusion.
 - **Decision (who, when):** keep: the person, 2026-10-28 ("Sounds good" to "keep item 3 and stop there, skip item 4"). After keep there is nothing to delete: the old handoff's code (path-only payload) is still what every result uses.
 
+### Upkeep (step 5), 2026-10-28
+
+- **Skills:** none were created (both changes needed none), so there's nothing for `/skill-doctor`, and no with/without-skill tests to keep.
+- **Ownership:** `single-loop/CONTRIBUTING-delegates.md`, adapted to delegate roles. The owner names are still open (question 6).
+- **Prompt audit:** done by hand from the live request bodies (v3, t01), not with `/claude-api prompt-audit`. It found 5 facts said more than once and about 12 all-caps markers:
+  - "no status tool / wait is the only way / don't poll": 4 times (prompt section, `acp_delegate` description, `acp_delegate_wait` description, a guideline)
+  - "wait timed out → don't retry, do other work": 2 times
+  - "FAILED → no usable result, consider re-dispatch": 2 times
+  - "child can't see this conversation → self-contained task": 2 times
+  - "results go to a file to keep context small": 2 times
+  - All-caps markers: NO, NOT, BLOCKS, ONLY, STOP, KEEP, "do NOT".
+  - The repeated-work gap sits in the same text: "go do other work" never excludes the delegated scope.
+- **Proposed round (not built):** one statement per fact, no shouting, and "other work" defined as work outside what was delegated. It's one variant, because it changes what every task sees. Main-call savings are measurable here. Whether models still avoid polling and redoing work after the dedupe is not measurable here; it needs a live model.
+
 ## Open questions for owners
 
 1. **Config surface (blocks item 1).** Users can set `delegate.agents.<role>.model` in `acp.json` (`pi-subagents/src/config.ts:77-79`). If `researcher`/`planner`/`oracle` are merged, existing per-role config for the removed names silently stops applying. Under AGENTS.md "Configuration Surface Discipline" that needs owner sign-off before it is built. Options: keep the old names as aliases, or accept the break with a doc note.
