@@ -165,12 +165,12 @@ lowest risk up.
 
 - [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); kept
 - [x] 2. fold `worker` (remove the role; the main agent edits itself) · variant: v2 · compared with: v1 · result: holds (10/11 both sides); kept
-- [x] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: v3 · compared with: v2 · result: holds (13/14 vs 10/14 on the extended set); decision pending
+- [x] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: v3 · compared with: v2 · result: holds (13/14 vs 10/14 on the extended set); kept
   - **Blocked before building (2026-10-28), waiting on the person:**
     - (a) **Conflicts with a deliberate design.** The minimal payload is on purpose: `formatPayload` puts "NO preview: the model uses `read` for details … Keeping this minimal means it stays cheap to retain in context" (`delegate-tool.ts`, above `formatPayload`; #2546 made notifications persisted session messages). An inline structured result grows every later main call.
     - (b) **The eval can't see the change.** The scripted child always replies `收到#done`, so a schema check in code would only ever exercise the malformed path, never the happy one.
     - Proposed shape: the child writes its result in the `SubagentResponse` shape into the result file; code validates it and flags a malformed one in the tool result; the inline payload stays path-only. Plus an additive "scripted final reply" directive in `tests/e2e/fake-upstream-chat.mjs`, so tasks can grade both paths.
-- [ ] 4. merged investigator as-tool: structured result · variant: · compared with: · result:
+- [ ] 4. ~~merged investigator as-tool: structured result~~ · **skipped by decision** (see Left as it is)
 
 Repo rules that bind every item: any `pi-subagents/src/**` change bumps
 `pi-subagents/package.json` version (CI `pi-subagents-guard`), and needs an issue plus a PR,
@@ -297,7 +297,7 @@ Comparison with `v2` (`compare.py ... v2 v3 --exclude main`):
   - Letting main check the conclusion (step 4.5): main already holds `read`/`grep`, so nothing to add.
 - **Not measured:** whether a real model follows the JSON instruction. If it often doesn't, every review arrives flagged "low confidence", and main may start redoing reviews (repeated work) or distrusting good ones. Needs a live model.
 - **What this does not fix** (revisit at the next model upgrade): the reviewer keeps its own prompt; each call still hands back a summary that loses detail; each call is a nested model loop (latency); and main must `read` the file to see the conclusion.
-- **Decision (who, when):** pending.
+- **Decision (who, when):** keep: the person, 2026-10-28 ("Sounds good" to "keep item 3 and stop there, skip item 4"). After keep there is nothing to delete: the old handoff's code (path-only payload) is still what every result uses.
 
 ## Open questions for owners
 
@@ -311,6 +311,8 @@ Comparison with `v2` (`compare.py ... v2 v3 --exclude main`):
 8. **Parallel writes (raised by the person 2026-10-28).** With `worker` folded, nothing can implement in parallel. What was lost is narrower than it looks: the old worker had no isolation. It wrote into the same cwd as main and every other worker, with no merge step, so two parallel workers could clobber each other. If traces or a live-model eval show real demand, the safer shape is a new `as-tool` implementer that works in its own git worktree and returns a patch for main to apply, so main stays the sole writer and conflicts surface at apply time. That would be a new design with its own eval tasks (two disjoint edits in parallel; two overlapping edits), not a revert.
 
 ## Left as it is, and why
+
+- **researcher stays `as-tool` without a structured result (item 4 skipped, 2026-10-28).** Its output varies by task (findings, a plan, a short answer), and one envelope with an `evidence` list fits the last two poorly. It's already reached through one bounded tool call that returns to main with no voice of its own. Revisit if live traces show main mishandling researcher results.
 
 - **external-summarizer:** it already earns its own context (reads whole fold ranges, returns a capped summary) and is already a bounded tool-style call with a structured result. The kernel owns its prompt (`kernel/`, human-gated).
 - **dsh-auto-review, opencode-task-subagents, claude-code-subagents:** host-owned. bili only handles their session identity. Flagged, not edited.
