@@ -159,6 +159,9 @@ interface AgentDef {
    *  child process, and ACP context tools are automatically appended. When
    *  absent/false, the child runs on Pi's full default toolset. */
   restricted?: boolean;
+  /** When true, the child starts with `--no-skills`: a role that never loads
+   *  a skill should not carry every skill description in its prompt. */
+  noSkills?: boolean;
 }
 
 // Minimal roster. The tool description lists these so the model knows how to
@@ -167,6 +170,7 @@ const AGENTS: Record<string, AgentDef> = {
   reviewer: {
     tools: RESTRICTED_TOOLS,
     restricted: true,
+    noSkills: true,
     prompt: `You are a senior code reviewer with read-only access.
 Read the given code and report: bugs, security/safety risks, correctness issues, and concrete improvement suggestions.
 Be specific — cite file:line for every finding. Do NOT modify any files; only read and report.`,
@@ -1854,6 +1858,7 @@ export async function buildChildArgs(
     const merged = [...new Set([...agentDef.tools.split(",").map(s => s.trim()), ...ACP_TOOLS])];
     cliArgs.push("--tools", merged.join(","));
   }
+  if (agentDef?.noSkills && useSession) cliArgs.push("--no-skills");
 
   // Model: per-call > role default (delegate.agents.<role>.model) > inherit parent.
   // A role-configured model is validated against the live registry; a missing one
