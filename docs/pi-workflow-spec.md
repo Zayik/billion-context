@@ -86,23 +86,56 @@ Measured as characters of the model-facing text (tool `description` + JSON-seria
 
 | Item | Before | After |
 |---|---|---|
-| `acp_delegate` (description 2593, parameters 2335, guidelines 1068, snippet 84) | 6080 | _tbd_ |
-| `acp_delegate_wait` | 1365 | _tbd_ |
-| `acp_delegate_cancel` | 285 | _tbd_ |
-| `ACP_DELEGATE_PROMPT` section | 1998 | _tbd_ |
-| **delegate surface total** | **9728** | _tbd_ |
-| bili compression tools (unchanged, for reference; Anthropic manifest JSON) | ~5440 | ~5440 |
-| model-invoked skill descriptions in the fork (11 skills) | 2156 | _tbd_ |
+| `acp_delegate` (description 2593 → 884, parameters 2335 → 1183, guidelines 1068 → 399, snippet 84 → 93) | 6080 | 2559 |
+| `acp_delegate_wait` | 1365 | 489 |
+| `acp_delegate_cancel` | 285 | 285 |
+| `ACP_DELEGATE_PROMPT` section | 1998 | 478 |
+| **delegate surface total** | **9728** | **3811** (−61%, pinned at ≤ 4200 by `pi-subagents/tests/prompt-surface-budget.test.ts`) |
+| model-invoked skill descriptions in the fork (11 skills) | 2156 | 2087 |
 
-"Before" was measured on the pre-change code with the default policy (`maxConcurrent` unlimited, so the tool description carried no concurrency note).
+"Before" was measured on the pre-change code with the default policy (`maxConcurrent` unlimited, so the tool description carried no concurrency note); "after" includes the new concurrency note.
+
+### Measured on the wire
+
+The real request pi 1.4.0 sends, captured at the scripted fake upstream (`tests/e2e/fake-upstream-chat.mjs` with `FAKE_DUMP`), in an isolated home with billion-context loaded as a pi package and the skills fork's `engineering`, `productivity` and `in-progress` buckets as skill paths. Steady-state request (the second; the first leaves before bili registers its tools, #1243). Characters, with skill `<location>` paths stripped so checkout paths don't skew the numbers.
+
+| Part of every main call | Before (master `885b9480` + skills `main`) | After (this branch, both repos) |
+|---|---|---|
+| Delegate tool definitions (3 tools, OpenAI wire JSON) | 6620 | 3035 |
+| Delegate prompt section | 1998 | 478 |
+| `<available_skills>` block (11 model-invoked skills) | 3149 | 3080 |
+| bili compression tools (6) | 5610 | 5610 |
+| bili compression prompt ("Compression Philosophy" … "HOW TO COMPRESS") | 11261 | 11261 |
+| pi base prompt + built-in tools (read, bash, edit, write) | rest | rest |
+| **System prompt + all tool definitions** | **36262** | **30245** (−17%) |
+
+The largest fixed cost is billion-context's own compression prompt (≈ 11.3k chars, ≈ 2.8k tokens). It is kernel-owned and golden-pinned (`tests/golden/wire-contract/kernel.json`), so trimming it is a kernel change under the Kernel Boundary and out of scope here (follow-up).
 
 ## Known edges, not fixed here
 
 - A third-party `pi-subagents` package installed at **user** scope stays active beside `acp_delegate` (only a project-scope install stands it down, #415), and bili's lane does not warn.
 - `pi-subagents` develops against pi 0.83.0; the target machine runs pi 1.4.0. Structural checks are run against 1.4.0.
 - Skills outside the two paths (`research`, `retro`, `triage`, `wayfinder`, `codebase-design`, `improve-codebase-architecture`, `grill-me`, `writing-for-agents`, in-progress and misc) still carry Claude Code wording. `ask-matt` still routes to `research`'s background-agent model.
+- bili's compression prompt (above) is the biggest fixed cost per call; the delegate tools could also move behind pi's `tool_search` (`exposure: "deferred"`). Both are follow-ups.
+- `tests/e2e/e2e-delegate-notify.test.ts` and the other native-pi e2e suites skip on Windows: they spawn `pi` without a shell, and pi's Windows entry is a `.cmd` shim. They run on the Linux CI lanes.
 
 ## Verification
 
-- **Now (no model):** `pi-subagents` and bili unit tests and typecheck; a scan of the adapted skills for Claude Code-only dependencies; the before/after sizes above; pi 1.4.0 loading the skills and bili together without errors; existing scripted fake-model harnesses for structural checks only.
-- **Later (live, on pi with quota):** `docs/pi-workflow-live-test-plan.md`. Only the live run can show whether models stop duplicating reads, still delegate when they should, and load the skills at the right time.
+### Verified now, without a model (2026-10-29)
+
+| Check | Result |
+|---|---|
+| `pi-subagents` unit suite (`npm --prefix pi-subagents test`) and typecheck | 271/271 pass; `tsc` clean |
+| bili typecheck (`tsc --noEmit -p tsconfig.json`) | clean |
+| bili targeted suite `tests/pi-subagents-wiring.test.ts` | 19/19 pass |
+| CI gates run locally: docs-sync (`gen-config-docs generate` + diff, in an LF checkout), `check-coverage`, `config-surface-guard`, `check-unused-exports`, `check-test-import-graph`, root `lock-sync` | all clean |
+| pi 1.4.0 loads billion-context and the skills fork together | no errors on stderr; 11 model-invoked skills listed; 13 tools declared on the steady-state request |
+| Scripted delegate run on real pi 1.4.0 (fake model, print mode) | the parent declares `acp_delegate`; the `worker` child gets 10 tools and **no** `acp_delegate` (depth cap); the child's reply comes back inline ("no need to read the file"); `planner` is refused with "Choose one of: reviewer, researcher, worker" |
+| Adapted skills scanned for Claude Code-only dependencies (Skill tool, sub-agent tool, `/clear`, `.claude/`, AskUserQuestion) | none left; remaining hits are deliberate (pi's own `/compact` named as not used, `research`'s background agent as a known follow-up) |
+| Fixed prompt surface before/after | tables above |
+
+Not verified now: the full bili suite (its verdict is the remote CI `test` lanes, AGENTS.md §7.2), the codex e2e (no request-pipeline change), and any model behavior. One load-check run hung with no request captured and passed on retry; the cause was not found.
+
+### Waits for the live run
+
+`docs/pi-workflow-live-test-plan.md`. Only a live run can show whether models stop duplicating reads, still delegate when they should, load the skills at the right time, and recover folded decisions instead of re-asking.
