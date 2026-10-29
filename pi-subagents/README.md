@@ -106,7 +106,7 @@ or object form:
 | `delegate.syncTimeoutMinutes` | number \| null | `5` | Hard timeout for synchronous delegates. `0`/`null` disables. Env: `PI_ACP_DELEGATE_SYNC_TIMEOUT_MINUTES`. |
 | `delegate.idleTimeoutMinutes` | number \| null | `5` | Idle watchdog for async delegates (kill when no output). `0`/`null` disables (warns — hung children must then be cancelled manually via `acp_delegate_cancel`). Env: `PI_ACP_DELEGATE_IDLE_TIMEOUT_MINUTES`. |
 | `delegate.asyncTimeoutMinutes` | number \| null | `30` | Hard time limit for async delegates. `0`/`null` disables. Env: `PI_ACP_DELEGATE_ASYNC_TIMEOUT_MINUTES`. |
-| `delegate.maxConcurrent` | number | unlimited | Cap on concurrent background delegates (`1` = strict serial; extras queue). Invalid values fall back to unlimited with a warning. Env: `PI_ACP_DELEGATE_MAX_CONCURRENT`. |
+| `delegate.maxConcurrent` | number | `3` | Cap on concurrent background delegates (`1` = strict serial; extras queue). Invalid values fall back to the default with a warning. Env: `PI_ACP_DELEGATE_MAX_CONCURRENT`. |
 | `delegate.thinkingLevel` | string | unset | Global default thinking level (off\|minimal\|low\|medium\|high\|xhigh\|max). Priority: per-call > role > global > Pi default. |
 | `delegate.agents` | object | unset | Per-role defaults: `{ "<role>": { "model": "provider/id", "thinkingLevel": "…" } }`. Invalid models fall back to the parent model with a warning (never fail). |
 | `delegate.notifyIfRead` | `"skip" \| "always"` | `"skip"` | Skip the completion notification when the model already read the result file after the run finished. |
