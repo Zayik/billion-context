@@ -166,6 +166,10 @@ lowest risk up.
 - [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); kept
 - [x] 2. fold `worker` (remove the role; the main agent edits itself) · variant: v2 · compared with: v1 · result: holds (10/11 both sides); kept
 - [ ] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: · compared with: · result:
+  - **Blocked before building (2026-10-28), waiting on the person:**
+    - (a) **Conflicts with a deliberate design.** The minimal payload is on purpose: `formatPayload` puts "NO preview: the model uses `read` for details … Keeping this minimal means it stays cheap to retain in context" (`delegate-tool.ts`, above `formatPayload`; #2546 made notifications persisted session messages). An inline structured result grows every later main call.
+    - (b) **The eval can't see the change.** The scripted child always replies `收到#done`, so a schema check in code would only ever exercise the malformed path, never the happy one.
+    - Proposed shape: the child writes its result in the `SubagentResponse` shape into the result file; code validates it and flags a malformed one in the tool result; the inline payload stays path-only. Plus an additive "scripted final reply" directive in `tests/e2e/fake-upstream-chat.mjs`, so tasks can grade both paths.
 - [ ] 4. merged investigator as-tool: structured result · variant: · compared with: · result:
 
 Repo rules that bind every item: any `pi-subagents/src/**` change bumps
