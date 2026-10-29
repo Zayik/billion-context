@@ -44,15 +44,13 @@ No configuration needed — delegates are enabled by default. Restart Pi after i
 
 ### Roles
 
-Five built-in roles, each with a system prompt and a **soft tool guardrail**:
+Three built-in roles, each with a system prompt and a **soft tool guardrail**. Each one exists for a case where a fresh context beats the main loop; everything else stays in the main agent:
 
 | Role | Tools | Best for |
 |------|-------|----------|
-| `reviewer` | read, bash, grep, find, ls + ACP | Read-only code review (bugs, risks, file:line) |
-| `researcher` | read, bash, grep, find, ls + ACP | Read-only codebase investigation |
-| `worker` | read, edit, write, bash | Make code changes |
-| `planner` | read, bash, grep, find, ls + ACP | Analyze + propose a step-by-step plan |
-| `oracle` | read, bash, grep, find, ls + ACP | Answer questions / advise |
+| `reviewer` | read, bash, grep, find, ls + ACP | Independent read-only review of a diff (bugs, risks, file:line) |
+| `researcher` | read, bash, grep, find, ls + ACP | A large lookup whose raw material the main agent will not need afterwards |
+| `worker` | read, edit, write, bash | A pre-scoped edit that runs in parallel with other, disjoint work |
 
 Read-only roles receive a restricted tool allowlist plus ACP context tools so they can manage their own context. This prevents accidental file modifications, but `bash` can bypass it — **it is a guardrail, not a security boundary**. Worker runs on Pi's full default toolset (any loaded extension or custom tools stay available).
 
