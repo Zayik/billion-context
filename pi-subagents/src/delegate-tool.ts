@@ -173,19 +173,6 @@ Do NOT modify any files; only read and report.`,
 Make exactly the requested code changes — minimal, focused, following existing project conventions (check AGENTS.md first if present).
 After editing, briefly summarize what you changed and why. Do not expand scope.`,
   },
-  planner: {
-    tools: RESTRICTED_TOOLS,
-    restricted: true,
-    prompt: `You are a technical planner with read-only access.
-Analyze the task and produce a concrete, ordered step-by-step implementation plan with rationale for each step.
-Cite file:line for code you reference. Do NOT modify any files; only read and propose.`,
-  },
-  oracle: {
-    tools: RESTRICTED_TOOLS,
-    restricted: true,
-    prompt: `You are an expert advisor with read-only access.
-Answer the question concisely with clear reasoning. Cite file:line when referencing code. Do NOT modify any files.`,
-  },
 };
 
 const AGENT_NAMES = Object.keys(AGENTS);
@@ -708,8 +695,6 @@ const agentListLine = (name: string): string => {
     reviewer: "read-only code review (bugs/risks, file:line)",
     researcher: "read-only codebase investigation",
     worker: "make code changes (read+edit+write)",
-    planner: "analyze + propose step-by-step plan (read-only)",
-    oracle: "answer questions / advise (read-only)",
   };
   return `  • ${name} - ${blurb[name]} [tools: ${def.tools}${def.restricted ? " + ACP context tools" : ""}]`;
 };
@@ -748,8 +733,8 @@ The delegate runs in its own clean pi process — it does NOT see this conversat
       "Prefer async=true and launch several; results arrive back automatically when each finishes.",
       "A FAILED notification (⚠️) means that task produced no usable result — read the excerpt and the output files, then decide whether to re-dispatch it before wrapping up.",
       "A failed/cancelled run keeps its output files and can be resumed with resumeFrom: \"<runId>\" — prefer resuming over re-dispatching when the earlier work is worth keeping.",
-      "For changes you must apply yourself, delegate read-only investigation (reviewer/researcher/oracle) and keep the main context as the sole writer.",
-      "Route by task kind: review/audit code → reviewer (never use worker to review), explore unfamiliar code → researcher, plan multi-step work → planner, questions/advice → oracle, making changes → worker.",
+      "For changes you must apply yourself, delegate read-only investigation (reviewer/researcher) and keep the main context as the sole writer.",
+      "Route by task kind: review/audit code → reviewer (never use worker to review), explore unfamiliar code → researcher, making changes → worker.",
       "A delegate's findings live in its result file — read that file instead of re-running exploration a child already did.",
     ],
     parameters: DelegateParams,
