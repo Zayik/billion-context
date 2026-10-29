@@ -69,6 +69,17 @@ for (const role of RESTRICTED_ROLES) {
   });
 }
 
+// ─── Skills: only the reviewer starts without them ──────────────────────────
+
+test("buildChildArgs: reviewer starts with --no-skills; researcher and worker keep their skills", async () => {
+  const argsFor = async (agent: string, host: "pi" | "omp" = "pi") =>
+    (await buildChildArgs({ agent, task: "t" }, "prompt", mockCtx(host), "del_skills")).cliArgs;
+  assert.ok((await argsFor("reviewer")).includes("--no-skills"), "reviewer drops skill discovery");
+  assert.ok(!(await argsFor("researcher")).includes("--no-skills"), "researcher keeps skills (a lookup may need one)");
+  assert.ok(!(await argsFor("worker")).includes("--no-skills"), "worker keeps skills (it builds with tdd)");
+  assert.ok(!(await argsFor("reviewer", "omp")).includes("--no-skills"), "non-pi hosts get no pi-only flag");
+});
+
 // ─── Worker: no --tools, full default toolset ─────────────────────────────
 
 test("buildChildArgs omits --tools for worker role", async () => {
