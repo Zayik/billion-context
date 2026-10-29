@@ -240,7 +240,7 @@ test("fleetRunsSnapshot maps real spawns: failed run fields, running-first order
 
     // 2) sleeping child → running, ordered first
     process.env.PI_CLI_PATH = sleepScript;
-    const res2 = await tool.execute("tc-fleet-sleep", { agent: "worker", task: "long task", cwd: workDir, async: true }, undefined, undefined, mockCtx(workDir));
+    const res2 = await tool.execute("tc-fleet-sleep", { agent: "reviewer", task: "long task", cwd: workDir, async: true }, undefined, undefined, mockCtx(workDir));
     const sleepId = /`(del_[a-z0-9_]+)`/.exec((res2.content[0] as { text?: string }).text ?? "")?.[1];
     assert.ok(sleepId, "second runId extracted");
     cleanupIds.push(sleepId!);

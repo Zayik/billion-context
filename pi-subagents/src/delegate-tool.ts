@@ -169,12 +169,6 @@ Be specific — cite file:line for every finding. Do NOT modify any files; only 
 - a question: a concise answer with clear reasoning.
 Cite file:line for every piece of code you reference. Do NOT modify any files; only read and report.`,
   },
-  worker: {
-    tools: "read,edit,write,bash",
-    prompt: `You are a precise implementer.
-Make exactly the requested code changes — minimal, focused, following existing project conventions (check AGENTS.md first if present).
-After editing, briefly summarize what you changed and why. Do not expand scope.`,
-  },
 };
 
 const AGENT_NAMES = Object.keys(AGENTS);
@@ -696,7 +690,6 @@ const agentListLine = (name: string): string => {
   const blurb: Record<string, string> = {
     reviewer: "read-only code review (bugs/risks, file:line)",
     researcher: "read-only investigation: explore code, propose a step-by-step plan, or answer a question",
-    worker: "make code changes (read+edit+write)",
   };
   return `  • ${name} - ${blurb[name]} [tools: ${def.tools}${def.restricted ? " + ACP context tools" : ""}]`;
 };
@@ -710,7 +703,7 @@ export function makeDelegateTool(pi: ExtensionAPI): ToolDefinition<typeof Delega
   return {
     name: "acp_delegate",
     label: "ACP Delegate",
-    description: `Hand a self-contained task to a fresh sub-agent running in a clean context (its own pi process). Use to get focused review/investigation/implementation without polluting the main context, or to run several tasks concurrently.
+    description: `Hand a self-contained task to a fresh sub-agent running in a clean context (its own pi process). Use to get focused review/investigation without polluting the main context, or to run several tasks concurrently.
 
 Agents (pick by name):
 ${AGENT_NAMES.map(agentListLine).join("\n")}
@@ -735,8 +728,8 @@ The delegate runs in its own clean pi process — it does NOT see this conversat
       "Prefer async=true and launch several; results arrive back automatically when each finishes.",
       "A FAILED notification (⚠️) means that task produced no usable result — read the excerpt and the output files, then decide whether to re-dispatch it before wrapping up.",
       "A failed/cancelled run keeps its output files and can be resumed with resumeFrom: \"<runId>\" — prefer resuming over re-dispatching when the earlier work is worth keeping.",
-      "For changes you must apply yourself, delegate read-only investigation (reviewer/researcher) and keep the main context as the sole writer.",
-      "Route by task kind: review/audit code → reviewer (never use worker to review), explore code, plan multi-step work, or ask questions → researcher, making changes → worker.",
+      "Delegates are read-only: make code changes yourself and delegate only investigation (reviewer/researcher); the main context is the sole writer.",
+      "Route by task kind: review/audit code → reviewer; explore code, plan multi-step work, or ask questions → researcher.",
       "A delegate's findings live in its result file — read that file instead of re-running exploration a child already did.",
     ],
     parameters: DelegateParams,

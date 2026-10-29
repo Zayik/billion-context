@@ -368,7 +368,7 @@ async function runScenario(name: string, prompt: string, totalDirectives: number
 }
 
 const SLEEP = '请调用bash {"command":"sleep 2"}';
-const DELEGATE = '请调用acp_delegate {"agent":"worker","task":"quick probe","async":true}';
+const DELEGATE = '请调用acp_delegate {"agent":"researcher","task":"quick probe","async":true}';
 
 // warmup bash + async delegate + 8 x sleep-2 rounds: the completion notice must
 // land DURING the sleep rounds (queue not yet exhausted) and the run keeps going.

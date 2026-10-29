@@ -208,7 +208,7 @@ test("queued run renders once it enters running under maxConcurrent=1 (#2737)", 
 
     const resB = await tool.execute(
       "tc-widget-q-b",
-      { agent: "worker", task: "queued runner", async: true },
+      { agent: "reviewer", task: "queued runner", async: true },
       undefined,
       undefined,
       tuiCtx(ui, cwd),
@@ -218,14 +218,14 @@ test("queued run renders once it enters running under maxConcurrent=1 (#2737)", 
 
     const early = calls.filter((c) => c.lines !== undefined);
     assert.ok(early.some((c) => c.lines!.some((l) => l.includes("researcher"))), "A rendered while running");
-    assert.ok(!calls.some((c) => c.lines !== undefined && c.lines!.some((l) => l.includes("worker"))), "B not rendered while queued");
+    assert.ok(!calls.some((c) => c.lines !== undefined && c.lines!.some((l) => l.includes("reviewer"))), "B not rendered while queued");
 
     // Release A: its child exits on the next poll tick, the FIFO queue drains
     // event-driven and spawns B (whose child sees the sentinel already present
     // and exits promptly). No sleep anywhere on this path.
     await writeFile(gateFile, "", "utf8");
     await waitFor(
-      () => calls.some((c) => c.lines !== undefined && c.lines!.some((l) => l.includes("worker"))),
+      () => calls.some((c) => c.lines !== undefined && c.lines!.some((l) => l.includes("reviewer"))),
       "B rendered after entering running",
       10000,
     );

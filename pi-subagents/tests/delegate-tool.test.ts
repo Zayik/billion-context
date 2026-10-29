@@ -1014,20 +1014,20 @@ test("formatBatchRunSection carries the timeout note and error excerpt", () => {
   assert.ok(!ok.includes("hidden"), "completed runs carry no body");
 });
 
-// ─── Role roster: planner/oracle merged into researcher ─────────────────────
+// ─── Role roster: planner/oracle merged into researcher, worker folded ──────
 
-test("role roster offers reviewer, researcher and worker only; merged names are rejected", async () => {
+test("role roster offers reviewer and researcher only; merged and folded names are rejected", async () => {
   const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof makeDelegateTool>[0];
   const tool = makeDelegateTool(pi);
   const offered = [...tool.description.matchAll(/^ {2}• (\w+) - /gm)].map((m) => m[1]);
-  assert.deepEqual(offered, ["reviewer", "researcher", "worker"]);
-  assert.doesNotMatch(tool.description + JSON.stringify(tool.promptGuidelines), /\b(planner|oracle)\b/);
+  assert.deepEqual(offered, ["reviewer", "researcher"]);
+  assert.doesNotMatch(tool.description + JSON.stringify(tool.promptGuidelines), /\b(planner|oracle|worker)\b/);
 
   const ctx = { ...mockCtx("pi"), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
   const textOf = (res: Awaited<ReturnType<typeof tool.execute>>): string => (res.content[0] as { text?: string }).text ?? "";
-  for (const removed of ["planner", "oracle"]) {
+  for (const removed of ["planner", "oracle", "worker"]) {
     const res = await tool.execute(`tc-roster-${removed}`, { agent: removed, task: "x" }, undefined, undefined, ctx);
-    assert.match(textOf(res), /Unknown agent ".+"\. Choose one of: reviewer, researcher, worker\./, `${removed} is rejected`);
+    assert.match(textOf(res), /Unknown agent ".+"\. Choose one of: reviewer, researcher\./, `${removed} is rejected`);
   }
 
   const { cliArgs } = await buildChildArgs({ agent: "researcher", task: "plan the change" }, "prompt", mockCtx(), "del_roster");
