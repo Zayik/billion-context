@@ -313,6 +313,10 @@ Comparison with `v2` (`compare.py ... v2 v3 --exclude main`):
   - The repeated-work gap sits in the same text: "go do other work" never excludes the delegated scope.
 - **Proposed round (not built):** one statement per fact, no shouting, and "other work" defined as work outside what was delegated. It's one variant, because it changes what every task sees. Main-call savings are measurable here. Whether models still avoid polling and redoing work after the dedupe is not measurable here; it needs a live model.
 
+### Where the work lives (2026-10-28)
+
+The person's rule: no issues or PRs on the upstream repo (`ranxianglei/billion-context`); changes go only to the fork, `Zayik/billion-context` (`origin`). The three stacked branches are pushed there (`2026-10-28_merge-readonly-delegate-roles` → `2026-10-28_fold-worker-delegate-role` → `2026-10-28_reviewer-structured-result`). No issues and no PRs were opened anywhere.
+
 ## Open questions for owners
 
 1. **Config surface (blocks item 1).** Users can set `delegate.agents.<role>.model` in `acp.json` (`pi-subagents/src/config.ts:77-79`). If `researcher`/`planner`/`oracle` are merged, existing per-role config for the removed names silently stops applying. Under AGENTS.md "Configuration Surface Discipline" that needs owner sign-off before it is built. Options: keep the old names as aliases, or accept the break with a doc note.
