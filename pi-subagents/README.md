@@ -49,10 +49,8 @@ Five built-in roles, each with a system prompt and a **soft tool guardrail**:
 | Role | Tools | Best for |
 |------|-------|----------|
 | `reviewer` | read, bash, grep, find, ls + ACP | Read-only code review (bugs, risks, file:line) |
-| `researcher` | read, bash, grep, find, ls + ACP | Read-only codebase investigation |
+| `researcher` | read, bash, grep, find, ls + ACP | Read-only investigation: explore code, propose a step-by-step plan, or answer a question |
 | `worker` | read, edit, write, bash | Make code changes |
-| `planner` | read, bash, grep, find, ls + ACP | Analyze + propose a step-by-step plan |
-| `oracle` | read, bash, grep, find, ls + ACP | Answer questions / advise |
 
 Read-only roles receive a restricted tool allowlist plus ACP context tools so they can manage their own context. This prevents accidental file modifications, but `bash` can bypass it — **it is a guardrail, not a security boundary**. Worker runs on Pi's full default toolset (any loaded extension or custom tools stay available).
 

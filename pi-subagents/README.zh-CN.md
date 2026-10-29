@@ -51,10 +51,8 @@ pi install npm:billion-context-pi-subagents
 | 角色 | 工具 | 适用场景 |
 |------|------|----------|
 | `reviewer` | read, bash, grep, find, ls + ACP | 只读代码审查（缺陷、风险、file:line） |
-| `researcher` | read, bash, grep, find, ls + ACP | 只读代码库调研 |
+| `researcher` | read, bash, grep, find, ls + ACP | 只读调研：探索代码、提出分步计划或回答问题 |
 | `worker` | read, edit, write, bash | 进行代码修改 |
-| `planner` | read, bash, grep, find, ls + ACP | 分析并提出分步计划 |
-| `oracle` | read, bash, grep, find, ls + ACP | 回答问题 / 提供建议 |
 
 只读角色会收到受限的工具允许列表加上 ACP 上下文工具，以便管理自身上下文。这可以防止意外的文件修改，但 `bash` 可以绕过它 — **它是护栏，不是安全边界**。Worker 使用 Pi 的完整默认工具集（任何已加载的扩展或自定义工具仍然可用）。
 

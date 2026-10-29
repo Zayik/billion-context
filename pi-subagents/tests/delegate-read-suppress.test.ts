@@ -114,7 +114,7 @@ async function seedRunId(): Promise<string> {
   const ctx = { ...mockCtx(), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
   const res = await tool.execute(
     "tc-read-mark",
-    { agent: "oracle", task: "e2e", cwd: "/nonexistent-e2e-cwd", async: true },
+    { agent: "researcher", task: "e2e", cwd: "/nonexistent-e2e-cwd", async: true },
     undefined,
     undefined,
     ctx,
@@ -157,7 +157,7 @@ test("failed run read after finish still gets its FAILED notification", async ()
   const ctx = { ...mockCtx(), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
   const res = await tool.execute(
     "tc-fail-loud",
-    { agent: "oracle", task: "e2e", cwd: "/nonexistent-e2e-cwd", async: true },
+    { agent: "researcher", task: "e2e", cwd: "/nonexistent-e2e-cwd", async: true },
     undefined,
     undefined,
     ctx,

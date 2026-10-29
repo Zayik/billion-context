@@ -73,9 +73,8 @@ export interface DelegateConfig {
    *  off|minimal|low|medium|high|xhigh|max. When unset at all levels, no
    *  `--thinking` flag is passed and each child uses Pi's own default. */
   thinkingLevel?: string;
-  /** Per-role defaults keyed by role name (reviewer/researcher/worker/planner/
-   *  oracle, or any custom role). See DelegateRoleConfig. Only affects roles
-   *  that are named here; other roles inherit the parent model + Pi defaults. */
+  /** Per-role defaults keyed by role name (reviewer/researcher/worker). See
+   *  DelegateRoleConfig. Only affects roles that are named here; other roles inherit the parent model + Pi defaults. */
   agents?: Record<string, DelegateRoleConfig>;
   /** What happens to the completion notification when the model has already
    *  read the delegate's result file after the run finished.

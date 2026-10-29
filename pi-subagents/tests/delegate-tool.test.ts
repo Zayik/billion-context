@@ -17,7 +17,7 @@ function mockCtx(host: "pi" | "omp" = "pi"): ExtensionContext {
   return { model: { provider: "test", id: "test-model" }, sessionManager } as unknown as ExtensionContext;
 }
 
-const RESTRICTED_ROLES = ["reviewer", "researcher", "planner", "oracle"] as const;
+const RESTRICTED_ROLES = ["reviewer", "researcher"] as const;
 const ACP_TOOLS = ["compress", "decompress", "search_context", "acp_status"];
 
 test("delegate spawn bypasses the shell for Windows executable paths", () => {
@@ -214,9 +214,9 @@ test("buildChildArgs model: inherits parent when neither per-call nor role confi
 
 test("buildChildArgs model: missing role model falls back to parent (never fails)", async () => {
   resetDelegateDefaults();
-  setDelegateDefaults({ agents: { oracle: { model: "ghost/nonexistent" } } });
+  setDelegateDefaults({ agents: { researcher: { model: "ghost/nonexistent" } } });
   const { cliArgs } = await buildChildArgs(
-    { agent: "oracle", task: "t" },
+    { agent: "researcher", task: "t" },
     "prompt", ctxWithRegistry({ provider: "parent", id: "parent-model" }), "del_m4",
   );
   assert.equal(flagVal(cliArgs, "--provider"), "parent");
@@ -225,9 +225,9 @@ test("buildChildArgs model: missing role model falls back to parent (never fails
 
 test("buildChildArgs model: malformed role model (no slash) ignored -> inherit parent", async () => {
   resetDelegateDefaults();
-  setDelegateDefaults({ agents: { planner: { model: "just-a-name" } } });
+  setDelegateDefaults({ agents: { researcher: { model: "just-a-name" } } });
   const { cliArgs } = await buildChildArgs(
-    { agent: "planner", task: "t" },
+    { agent: "researcher", task: "t" },
     "prompt", ctxWithRegistry({ provider: "parent", id: "parent-model" }), "del_m5",
   );
   assert.equal(flagVal(cliArgs, "--provider"), "parent");
@@ -696,7 +696,7 @@ test("async delegate with missing cwd injects FAILED instead of crashing the hos
   const ctx = { ...mockCtx("pi"), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
   const res = await tool.execute(
     "tc-spawn-enoent",
-    { agent: "oracle", task: "e2e", cwd: "/nonexistent-e2e-cwd", async: true },
+    { agent: "researcher", task: "e2e", cwd: "/nonexistent-e2e-cwd", async: true },
     undefined,
     undefined,
     ctx,
@@ -824,7 +824,7 @@ test("acp_delegate resumeFrom with a missing session file fails fast without spa
   const ctx = { ...mockCtx("pi"), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
   const res = await tool.execute(
     "tc-resume-missing",
-    { agent: "oracle", resumeFrom: "del_never_ran" },
+    { agent: "researcher", resumeFrom: "del_never_ran" },
     undefined,
     undefined,
     ctx,
@@ -840,7 +840,7 @@ test("acp_delegate resumeFrom is rejected on non-pi hosts", async () => {
   const ctx = { ...mockCtx("omp"), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
   const res = await tool.execute(
     "tc-resume-omp",
-    { agent: "oracle", task: "x", resumeFrom: "del_x" },
+    { agent: "researcher", task: "x", resumeFrom: "del_x" },
     undefined,
     undefined,
     ctx,
@@ -863,7 +863,7 @@ test("acp_delegate resumeFrom copies the original session into the new run's fil
   try {
     const res = await tool.execute(
       "tc-resume-copy",
-      { agent: "oracle", resumeFrom: "del_orig235", async: true },
+      { agent: "researcher", resumeFrom: "del_orig235", async: true },
       undefined,
       undefined,
       ctx,
@@ -1014,6 +1014,26 @@ test("formatBatchRunSection carries the timeout note and error excerpt", () => {
   assert.ok(!ok.includes("hidden"), "completed runs carry no body");
 });
 
+// ─── Role roster: planner/oracle merged into researcher ─────────────────────
+
+test("role roster offers reviewer, researcher and worker only; merged names are rejected", async () => {
+  const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof makeDelegateTool>[0];
+  const tool = makeDelegateTool(pi);
+  const offered = [...tool.description.matchAll(/^ {2}• (\w+) - /gm)].map((m) => m[1]);
+  assert.deepEqual(offered, ["reviewer", "researcher", "worker"]);
+  assert.doesNotMatch(tool.description + JSON.stringify(tool.promptGuidelines), /\b(planner|oracle)\b/);
+
+  const ctx = { ...mockCtx("pi"), mode: "tui", cwd: process.cwd() } as unknown as ExtensionContext;
+  const textOf = (res: Awaited<ReturnType<typeof tool.execute>>): string => (res.content[0] as { text?: string }).text ?? "";
+  for (const removed of ["planner", "oracle"]) {
+    const res = await tool.execute(`tc-roster-${removed}`, { agent: removed, task: "x" }, undefined, undefined, ctx);
+    assert.match(textOf(res), /Unknown agent ".+"\. Choose one of: reviewer, researcher, worker\./, `${removed} is rejected`);
+  }
+
+  const { cliArgs } = await buildChildArgs({ agent: "researcher", task: "plan the change" }, "prompt", mockCtx(), "del_roster");
+  assert.ok(getToolsValue(cliArgs)?.split(",").includes("read"), "researcher still dispatches with its read-only allowlist");
+});
+
 // ─── #279: configurable maxDepth + timeouts ─────────────────────────────────
 
 test("depth gate honors configured maxDepth (rejection paths, no spawn)", async () => {
@@ -1025,17 +1045,17 @@ test("depth gate honors configured maxDepth (rejection paths, no spawn)", async 
   try {
     setDelegatePolicy(DEFAULT_DELEGATE_POLICY);
     process.env.PI_ACP_DELEGATE_DEPTH = "2";
-    let res = await tool.execute("tc-depth-a", { agent: "oracle", task: "x" }, undefined, undefined, ctx);
+    let res = await tool.execute("tc-depth-a", { agent: "researcher", task: "x" }, undefined, undefined, ctx);
     assert.match(textOf(res), /nesting limit reached \(depth 2, max 2\)/, "default maxDepth 2 rejects depth 2");
 
     setDelegatePolicy({ ...DEFAULT_DELEGATE_POLICY, maxDepth: 1 });
     process.env.PI_ACP_DELEGATE_DEPTH = "1";
-    res = await tool.execute("tc-depth-b", { agent: "oracle", task: "x" }, undefined, undefined, ctx);
+    res = await tool.execute("tc-depth-b", { agent: "researcher", task: "x" }, undefined, undefined, ctx);
     assert.match(textOf(res), /nesting limit reached \(depth 1, max 1\)/, "maxDepth 1 rejects depth 1");
 
     setDelegatePolicy({ ...DEFAULT_DELEGATE_POLICY, maxDepth: 3 });
     process.env.PI_ACP_DELEGATE_DEPTH = "3";
-    res = await tool.execute("tc-depth-c", { agent: "oracle", task: "x" }, undefined, undefined, ctx);
+    res = await tool.execute("tc-depth-c", { agent: "researcher", task: "x" }, undefined, undefined, ctx);
     assert.match(textOf(res), /nesting limit reached \(depth 3, max 3\)/, "maxDepth 3 rejects depth 3");
   } finally {
     if (prev === undefined) delete process.env.PI_ACP_DELEGATE_DEPTH;
@@ -1283,7 +1303,7 @@ test("acp_delegate_wait timeout on a running run reports neutral text and leaves
     flushDelegateNotifications(pi);
     const res = await tool.execute(
       "tc-wait-to",
-      { agent: "oracle", task: "stay alive", async: true },
+      { agent: "researcher", task: "stay alive", async: true },
       undefined,
       undefined,
       ctx,
