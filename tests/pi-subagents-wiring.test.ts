@@ -265,6 +265,35 @@ test("pi.subagents enabled:false drops the tools, prompt section and shortcut", 
     assert.equal(prompt, undefined, "no prompt event result while disabled");
 });
 
+test("a delegate child at maxDepth registers no delegate tools or prompt; a raised cap restores them", async () => {
+    const prev = process.env.PI_ACP_DELEGATE_DEPTH;
+    process.env.PI_ACP_DELEGATE_DEPTH = "1";
+    try {
+        for (const [subagents, expectTools] of [[{}, false], [{ maxDepth: 2 }, true]] as const) {
+            clearBiliConfig();
+            writeBiliConfig({ pi: { subagents } });
+            const { pi, handlers, tools } = fakePi();
+            (globalThis as Record<symbol, unknown>)[Symbol.for("acp-delegate.embedded")] = false;
+            wirePiSubagents(pi, "pi");
+            const ctx = sessionCtx();
+            await handlers.get("session_start")!(undefined, ctx);
+            const prompt = await handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, ctx);
+            if (expectTools) {
+                assert.deepEqual([...tools].sort(), ["acp_delegate", "acp_delegate_cancel", "acp_delegate_wait"]);
+                assert.notEqual(prompt, undefined, "prompt section present below the cap");
+            } else {
+                assert.deepEqual(tools, []);
+                assert.equal(prompt, undefined, "no prompt section at the cap");
+            }
+        }
+    } finally {
+        (globalThis as Record<symbol, unknown>)[Symbol.for("acp-delegate.embedded")] = true;
+        if (prev === undefined) delete process.env.PI_ACP_DELEGATE_DEPTH;
+        else process.env.PI_ACP_DELEGATE_DEPTH = prev;
+        clearBiliConfig();
+    }
+});
+
 test("pi.subagents boolean shorthand false is equivalent", async () => {
     writeBiliConfig({ pi: { subagents: false } });
     const { pi, handlers, tools } = fakePi();
