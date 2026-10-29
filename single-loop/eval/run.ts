@@ -207,7 +207,7 @@ function grade(task: Task, requests: WireRequest[], writes: string[]): { pass: b
   // files, not messages.
   const repliesIn = (texts: string[]): number => {
     const files = new Set(texts.flatMap((text) => [...text.matchAll(/Full result: `([^`]+)`/g)].map((m) => m[1]!)));
-    return [...files].filter((file) => fs.existsSync(file) && fs.readFileSync(file, "utf8").includes(DONE_TEXT)).length;
+    return [...files].filter((file) => fs.existsSync(file) && fs.readFileSync(file, "utf8").includes(expect.replyToken ?? DONE_TEXT)).length;
   };
   if (expect.syncHandoff) checks.handoff_out = repliesIn(mainToolResults) >= 1;
   if (expect.asyncHandoffs) {
@@ -215,6 +215,11 @@ function grade(task: Task, requests: WireRequest[], writes: string[]): { pass: b
     const delivered = repliesIn(notices);
     checks.handoff_out = delivered >= expect.asyncHandoffs;
     if (!checks.handoff_out) notes.push(`async notices=${notices.length} result files with reply=${delivered}`);
+  }
+  if (expect.shape) {
+    const delivered = [...mainToolResults, ...(main.at(-1)?.users ?? [])];
+    const pattern = expect.shape === "checked" ? /Result shape: checked/ : /Result shape: NOT checked/;
+    checks.result_shape = delivered.some((text) => pattern.test(text));
   }
   return { pass: Object.values(checks).every(Boolean), checks, notes };
 }

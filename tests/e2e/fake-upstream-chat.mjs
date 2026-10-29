@@ -5,7 +5,8 @@
 // the FIRST user message scripts the conversation: every "请调用<tool>" marker
 // becomes one queued tool round ("请调用<tool> {json}" pins the arguments —
 // braces may nest); when the queue is exhausted the model answers plain text
-// "收到#done". `compress` with no explicit args is
+// "收到#done", or the text of a "请回复<<<text>>>" marker when the prompt
+// carries one (scripted final replies). `compress` with no explicit args is
 // special-cased: the fake cites REAL refs harvested from the request's ACP tags
 // so the kernel has a foldable range. Every request — /chat/completions AND
 // /v1/messages (anthropic SSE, #2791 cross-protocol lanes) — is appended to
@@ -222,12 +223,12 @@ function answerFor(convKey, firstUserText, body) {
     }
     const queueKey = `${convKey}|${sourceText.slice(0, 64)}`;
     if (!convs.has(queueKey)) {
-        convs.set(queueKey, { directives: parseDirectives(sourceText), idx: 0 });
+        convs.set(queueKey, { directives: parseDirectives(sourceText), idx: 0, finalText: /请回复<<<([\s\S]*?)>>>/.exec(sourceText)?.[1] });
     }
     const conv = convs.get(queueKey);
     const i = conv.idx++;
     const directive = conv.directives[i];
-    if (!directive) return { content: "收到#done", queueIdx: i };
+    if (!directive) return { content: conv.finalText ?? "收到#done", queueIdx: i };
     let args = directive.args;
     if (directive.tool === "compress" && Object.keys(directive.args).length === 0) {
         args = compressArgs(acpRefs(body, "user"));

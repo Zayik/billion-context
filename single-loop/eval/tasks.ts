@@ -22,6 +22,10 @@ export interface Expect {
   toolError?: string;
   /** No child process may reach the model. */
   noChild?: boolean;
+  /** Text the handed-back result file must contain (default: the fake's plain "收到#done"). */
+  replyToken?: string;
+  /** How the result-shape line in main's tool result or notification must read. */
+  shape?: "checked" | "flagged";
 }
 
 export interface Task {
@@ -39,6 +43,14 @@ export const SANDBOX_FILES: Record<string, string> = {
 const tool = (name: string, args: Record<string, unknown>): string => `请调用${name} ${JSON.stringify(args)}`;
 const delegate = (agent: string, task: string, async = false): string => tool("acp_delegate", { agent, task, async });
 const SLEEP = tool("bash", { command: "sleep 1" });
+const reply = (text: string): string => `请回复<<<${text}>>>`;
+const goodResult = (token: string): string => reply("```json\n" + JSON.stringify({
+  conclusion: `${token} off-by-one: the loop reads xs[xs.length]`,
+  evidence: ["fixture.ts:3 loops with i <= xs.length"],
+  actions_taken: [],
+  confidence: "high",
+  caveats: ["the code was read, not run"],
+}) + "\n```");
 
 function delegated(id: string, intent: Intent, roles: RoleMap, token: string, childScript: string, expect: Omit<Expect, "childToken">): Task {
   return {
@@ -65,6 +77,9 @@ export function buildTasks(roles: RoleMap): Task[] {
     { id: "t08-unknown-role", tags: ["unhappy-path"], prompt: `MAIN t08-unknown-role: ${delegate("nonexistent", "CHILD t08 TOK-U8")};完成。`, expect: { writes: [], noChild: true, toolError: "Unknown agent" } },
     { id: "t09-empty-task", tags: ["unhappy-path"], prompt: `MAIN t09-empty-task: ${delegate(roles.review, "")};完成。`, expect: { writes: [], noChild: true, toolError: "Task must be a non-empty string" } },
     { id: "t10-async", tags: ["intent:review", "async"], prompt: `MAIN t10-async: ${delegate(roles.review, `CHILD t10-async TOK-C10 ${read("fixture.ts")}`, true)};${SLEEP};${SLEEP};${SLEEP};完成。`, expect: { writes: [], childToken: "TOK-C10", asyncHandoffs: 1 } },
+    { ...delegated("t12-review-shape-ok", "review", roles, "TOK-G12", `${read("fixture.ts")} ${goodResult("TOK-G12")}`, { writes: [], syncHandoff: true, replyToken: "TOK-G12 off-by-one", shape: "checked" }), tags: ["intent:review", "result-shape"] },
+    { ...delegated("t13-review-shape-bad", "review", roles, "TOK-M13", `${read("fixture.ts")} ${reply("TOK-M13 looks fine to me")}`, { writes: [], syncHandoff: true, replyToken: "TOK-M13 looks fine", shape: "flagged" }), tags: ["intent:review", "result-shape", "unhappy-path"] },
+    { id: "t14-review-shape-async", tags: ["intent:review", "async", "result-shape"], prompt: `MAIN t14-review-shape-async: ${delegate(roles.review, `CHILD t14-review-shape-async TOK-H14 ${read("fixture.ts")} ${goodResult("TOK-H14")}`, true)};${SLEEP};${SLEEP};${SLEEP};完成。`, expect: { writes: [], childToken: "TOK-H14", asyncHandoffs: 1, replyToken: "TOK-H14 off-by-one", shape: "checked" } },
     { id: "t11-parallel", tags: ["intent:review", "intent:research", "async", "chain:review+research"], prompt: `MAIN t11-parallel: ${delegate(roles.review, `CHILD t11-parallel TOK-D11 ${read("fixture.ts")}`, true)};${delegate(roles.research, `CHILD t11-parallel-b TOK-F11 ${read("notes.md")}`, true)};${SLEEP};${SLEEP};${SLEEP};完成。`, expect: { writes: [], childToken: "TOK-D11", asyncHandoffs: 2 } },
   ];
 }
