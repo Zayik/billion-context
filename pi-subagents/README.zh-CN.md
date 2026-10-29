@@ -55,6 +55,8 @@ pi install npm:billion-context-pi-subagents
 
 只读角色会收到受限的工具允许列表加上 ACP 上下文工具，以便管理自身上下文。这可以防止意外的文件修改，但 `bash` 可以绕过它 — **它是护栏，不是安全边界**。没有可写角色：代码修改由主代理自己完成。
 
+`reviewer` 在回复末尾给出一个 JSON 结果（`conclusion`、`evidence`、`actions_taken`、`confidence`、`caveats`）。回复仍原样写入结果文件；工具结果只多一行，说明该 JSON 是否通过校验，不符合时标为低置信度。
+
 ### 执行模型
 
 - **交互模式（TUI）& RPC 模式**：`async:true`（默认）在后台运行子进程；完成时会向聊天注入一条简短的完成通知 — **除非模型在运行结束后已经读取了结果文件**（通过 `read` 工具或引用该文件的 bash 命令检测到），此时通知会被跳过：模型已有结果，再次注入只会浪费上下文。在 `acp.json` 中设置 `delegate: { notifyIfRead: "always" }` 可恢复始终注入的行为。

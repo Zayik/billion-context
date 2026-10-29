@@ -20,6 +20,7 @@ import { DEFAULT_DELEGATE_POLICY, type DelegatePolicy, type DelegateRoleConfig }
 import { attachWatchdogs } from "./delegate-watchdog.js";
 import { parseEventLine, activityLines, newPortion, ThinkingCollector, type Usage } from "./delegate-events.js";
 import { isPiHost } from "./host.js";
+import { CALLER_NOTE, RESULT_FORMAT_INSTRUCTION, resultShapeLine } from "./result-shape.js";
 import {
   exitLabel,
   firstLine,
@@ -152,7 +153,11 @@ const AGENTS: Record<string, AgentDef> = {
     tools: RESTRICTED_TOOLS,
     prompt: `You are a senior code reviewer with read-only access.
 Read the given code and report: bugs, security/safety risks, correctness issues, and concrete improvement suggestions.
-Be specific — cite file:line for every finding. Do NOT modify any files; only read and report.`,
+Be specific — cite file:line for every finding. Do NOT modify any files; only read and report.
+
+${CALLER_NOTE}
+
+${RESULT_FORMAT_INSTRUCTION}`,
   },
   researcher: {
     tools: RESTRICTED_TOOLS,
@@ -174,6 +179,8 @@ interface DelegateRun {
   runId: string;
   agent: string;
   task: string;
+  /** Result-shape line for completed runs of structured-result roles (result-shape.ts). */
+  resultShape?: string;
   cwd: string;
   startedAt: number;
   finishedAt?: number;
@@ -746,7 +753,7 @@ export function formatRunResult(run: DelegateRun): string {
     run.status === "completed"
       ? `Delegate **${run.agent}** (runId \`${run.runId}\`) completed (${exit})${timeoutNote}${remainingLineForWait(run.runId)}`
       : `Delegate **${run.agent}** (runId \`${run.runId}\`) ${run.status === "failed" ? "FAILED ⚠️" : run.status} (${exit})${timeoutNote}${remainingLineForWait(run.runId)}`;
-  return formatPayload(header, run.result?.file ?? "", run.task, run.result?.body, run.status === "failed" ? run.activityFile : undefined);
+  return formatPayload(header, run.result?.file ?? "", run.task, run.result?.body, run.status === "failed" ? run.activityFile : undefined, run.status === "completed" ? run.resultShape : undefined);
 }
 
 /** Shared note for cancelled runs: their files are retained, so point the
@@ -1098,7 +1105,7 @@ export function formatBatchRunSection(run: DelegateRun): string {
   const status = failed ? "FAILED ⚠️" : "completed";
   const timeoutNote = run.timedOut ? ` (timed out: ${run.timedOut})` : "";
   const header = `[acp_delegate ${status}] **${run.agent}** (runId \`${run.runId}\`, ${exitLabel(run.result?.code ?? null, run.exitSignal)})${timeoutNote}`;
-  return formatPayload(header, run.result?.file ?? "", run.task, failed ? run.result?.body : undefined, failed ? run.activityFile : undefined);
+  return formatPayload(header, run.result?.file ?? "", run.task, failed ? run.result?.body : undefined, failed ? run.activityFile : undefined, failed ? undefined : run.resultShape);
 }
 
 /** Build the merged multi-run notification text. `fromQueue` distinguishes
@@ -1644,6 +1651,7 @@ async function runDelegate(
             // see "finished but result missing".
             run.result = { code, file, body };
             run.status = effectiveCode === 0 && !noOutput ? "completed" : "failed";
+            if (run.status === "completed") run.resultShape = resultShapeLine(run.agent, output);
             if (noOutput) logWarn("delegate", { event: "no-final-output", runId, agent: args.agent, code });
             run.finishedAt = Date.now();
             // If a wait is parked on this run, wake it — it owns the result now
@@ -2000,7 +2008,7 @@ export function formatSyncResult(agent: string, runId: string, task: string, r: 
   const status = r.timedOut ? "timed out" : r.code === 0 && !noOutput ? "completed" : "FAILED ⚠️";
   const header = `Delegate **${agent}** ${status} (runId \`${runId}\`, ${exitLabel(r.code, r.signal)}).`;
   if (r.code === 0 && !r.timedOut && !noOutput) {
-    return formatPayload(header, file, task);
+    return formatPayload(header, file, task, undefined, undefined, resultShapeLine(agent, r.stdout));
   }
   const body = r.timedOut ? "(timed out)" : r.code === 0 ? NO_FINAL_OUTPUT_BODY : (r.stderr.trim() || "(no stderr)");
   return formatPayload(header, file, task, body);
@@ -2123,7 +2131,7 @@ function buildInjectText(
     : "This is an automated system notification, NOT a user message. Read the result file if you need the details, then continue your original task; do not treat this as a new user request. It ends no task and grants no new scope — if your objective is still open, resume it from your recorded progress.";
   const header = `[acp_delegate ${statusLabel}] **${agent}** (runId \`${runId}\`, ${exitLabel(code, signal)})${timeoutNote}${remainingLine}${usageNote} ${closing}`;
   const { text: recoveryText, covered } = buildRecoveryNotice(Array.from(runs.values()), runId);
-  const text = formatPayload(header, file, task, failed ? body : undefined, failed ? activityFile : undefined) + (recoveryText ? `\n\n${recoveryText}` : "");
+  const text = formatPayload(header, file, task, failed ? body : undefined, failed ? activityFile : undefined, failed ? undefined : runs.get(runId)?.resultShape) + (recoveryText ? `\n\n${recoveryText}` : "");
   return { text, covered };
 }
 
@@ -2252,13 +2260,14 @@ function notifyTerminalFailure(pi: ExtensionAPI, run: DelegateRun): void {
 // and the result file path. NO preview: the model uses `read` for details,
 // and that read (not this message) is the large content. Keeping this minimal
 // means it stays cheap to retain in context (or to compress away).
-function formatPayload(header: string, file: string, task: string, body?: string, activityFile?: string): string {
+function formatPayload(header: string, file: string, task: string, body?: string, activityFile?: string, shapeLine?: string): string {
   const lines: string[] = [header, "", `Task: ${truncate(task, 160)}`];
   if (file) {
     lines.push(``, `Full result: \`${file}\``, "(use the `read` tool to open it if you need the details)");
   } else {
     lines.push("", "(result could not be persisted to a file)");
   }
+  if (shapeLine) lines.push(shapeLine);
   if (activityFile) {
     lines.push(`Activity log: \`${activityFile}\``, "(tool calls and their output, newest at the end — read it to see where the run went wrong)");
   }

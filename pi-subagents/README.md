@@ -53,6 +53,8 @@ Five built-in roles, each with a system prompt and a **soft tool guardrail**:
 
 Read-only roles receive a restricted tool allowlist plus ACP context tools so they can manage their own context. This prevents accidental file modifications, but `bash` can bypass it — **it is a guardrail, not a security boundary**. There is no writing role: the main agent makes code changes itself.
 
+`reviewer` ends its reply with one JSON result (`conclusion`, `evidence`, `actions_taken`, `confidence`, `caveats`). The reply still goes to the result file unchanged; the tool result adds one line saying whether that JSON was checked, or flags it as low confidence when it does not fit.
+
 ### Execution model
 
 - **Interactive (TUI) & RPC modes**: `async:true` (default) runs the child in the background; a short completion notification is injected into the chat when it finishes — **unless the model already read the result file after the run finished** (detected via the `read` tool or a bash command referencing the file), in which case the notification is skipped: the model already has the result, so re-injecting it would only waste context. Set `delegate: { notifyIfRead: "always" }` in `acp.json` to restore always-inject.
