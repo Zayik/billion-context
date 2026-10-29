@@ -163,7 +163,7 @@ calls per task, and how far the score moved between reps.
 Merges first, then folds, then as-tool changes. With no traffic data, the order runs from
 lowest risk up.
 
-- [ ] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: · compared with: · result:
+- [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); decision pending
 - [ ] 2. fold `worker` (remove the role; the main agent edits itself) · variant: · compared with: · result:
 - [ ] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: · compared with: · result:
 - [ ] 4. merged investigator as-tool: structured result · variant: · compared with: · result:
@@ -174,7 +174,39 @@ never a push to master.
 
 ## Changes
 
-None yet.
+### Item 1: merge `researcher` + `planner` + `oracle` (variant `v1`, branch `2026-10-28_merge-readonly-delegate-roles`, commit c2d3d234)
+
+Comparison with `baseline` (`compare.py ... baseline v1 --exclude main --exclude planner --exclude oracle`):
+
+| | baseline | v1 | change |
+| --- | ---: | ---: | ---: |
+| tasks complete | 10/11 | 10/11 | 0 |
+| latency per task (s) | 2.8 | 4.1 | +45% (see below) |
+| model calls per task | 4.4 | 4.4 | 0 |
+| input tokens per task | 34,308 | 34,199 | -0.3% |
+
+Tokens used next to the estimate: zero for both (scripted model). The figures measure prompt size, not spend.
+
+- **Tasks that changed score:** none. t07 fails on both sides (known gap: bash write by a read-only role).
+- **Tasks that changed route but not score:** t03-plan and t04-ask now run `researcher`, as intended. The researcher child costs ~6,560 input tokens per call, against ~6,520 for planner and ~6,490 for oracle: +45 tokens from the longer merged prompt. No task the change shouldn't touch moved route.
+- **Latency +45%:** concentrated in t06, t07 and t08 (one t08 rep took 13.9 s). These are reviewer and unknown-role tasks the merge doesn't touch, and their tokens and model calls are identical to the baseline. The changed tasks t02–t04 kept 2.9–3.3 s. Inferred cause: slower pi process startup on this machine during the v1 run (the same cause as the t05 harness error below). Not rerun.
+- **Edited in the main agent's prompt and tool list:**
+  - `acp_delegate` description: the role list is 3 lines, not 5, and the researcher blurb now reads "read-only investigation: explore code, propose a step-by-step plan, or answer a question".
+  - promptGuidelines: "(reviewer/researcher/oracle)" became "(reviewer/researcher)", and the routing line became "explore code, plan multi-step work, or ask questions → researcher".
+  - Effect: main's first call went from 7,524 to 7,470 tokens (-54 per call).
+  - Also edited: the child prompt for `researcher` (persona dropped, covers findings / plan / answer), config doc comments (`pi-subagents/src/config.ts`, `src/config.ts`) and the pi-subagents README en/zh. Version bump 0.2.2 → 0.2.3 (package.json + root package-lock).
+- **Checked with no model:**
+  - `npm --prefix pi-subagents test` 262/262, including a new two-direction roster test: it passes now and fails on the old code.
+  - `npm run typecheck` clean.
+  - `tests/pi-subagents-wiring` 18/18 and `pi-subagent-channel` 15/15.
+  - `pi-subagent-registry` 9/10: the one failure is a Windows symlink EPERM that fails identically without this change.
+  - The rebuilt `dist/agent/pi-native.js` contains the new roster.
+- **Harness error refilled:** t05-edit rep 2 first ran with no model call at all, because pi was slow to start and the quiet-period check counted the idle startup as finished. Eval bug fixed in `run.ts`: quiescence now only counts after streaming starts, and a run that never starts is a harness error. That rep was refilled in v1 (`--first-rep 2`). Every baseline row had started streaming (each made ≥2 model calls), so the fix doesn't change any baseline row.
+- **Skipped or not measured:** wrong pick, shortcut and repeated work (no live model). Whether a real model routes "plan" and "question" asks to `researcher` as well as it routed them to planner and oracle is untested.
+- **Old code:** the removed role entries live only in git; revert is `git revert c2d3d234`.
+- **Compat:** `delegate.agents.planner` / `delegate.agents.oracle` config now silently stops applying, and calls naming those roles get "Unknown agent". This is open owner question 1, unresolved; no aliases were added.
+- **Decision (who, when):** pending.
+- **Left open after the decision:** issue + PR not opened yet (AGENTS.md requires both). Owner question 1.
 
 ## Open questions for owners
 

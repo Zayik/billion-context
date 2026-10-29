@@ -23,6 +23,7 @@ const { values: opts } = parseArgs({
   options: {
     variant: { type: "string" },
     reps: { type: "string", default: "2" },
+    "first-rep": { type: "string", default: "1" },
     only: { type: "string" },
     repo: { type: "string", default: path.resolve(import.meta.dirname, "../..") },
     roles: { type: "string" },
@@ -239,7 +240,7 @@ async function runTask(task: Task, rep: number, variantDir: string): Promise<Rec
     stdio: "ignore",
   });
   const before = snapshot(sandbox);
-  const started = Date.now();
+  const startedAt = Date.now();
   let status = "ok";
   let error: string | undefined;
   let rpc: Rpc | undefined;
@@ -259,15 +260,19 @@ async function runTask(task: Task, rep: number, variantDir: string): Promise<Rec
     rpc.send({ type: "prompt", message: task.prompt });
     const quietMs = task.tags.includes("async") ? ASYNC_QUIET_MS : QUIET_MS;
     let lastActive = Date.now();
+    let started = false;
     const deadline = Date.now() + TASK_TIMEOUT_MS;
     while (Date.now() < deadline && rpc.proc.exitCode === null) {
       await sleep(SAMPLE_MS);
       rpc.send({ type: "get_state" });
       const state = rpc.states.at(-1);
-      if (state?.isStreaming || (state?.pendingMessageCount ?? 0) > 0) lastActive = Date.now();
-      if (rpc.states.length > 3 && Date.now() - lastActive >= quietMs) break;
+      if (state?.isStreaming || (state?.pendingMessageCount ?? 0) > 0) {
+        started = true;
+        lastActive = Date.now();
+      }
+      if (started && Date.now() - lastActive >= quietMs) break;
     }
-    if (Date.now() >= deadline) { status = "error"; error = "task timeout"; }
+    if (Date.now() >= deadline) { status = "error"; error = started ? "task timeout" : "pi never started the prompt"; }
     if (rpc.proc.exitCode !== null) { status = "error"; error = `pi exited ${rpc.proc.exitCode}: ${rpc.stderr.slice(-400)}`; }
   } catch (e) {
     status = "error";
@@ -276,7 +281,7 @@ async function runTask(task: Task, rep: number, variantDir: string): Promise<Rec
     rpc?.kill();
     try { fake.kill("SIGKILL"); } catch { /* already gone */ }
   }
-  const latency = (Date.now() - started) / 1000 - (task.tags.includes("async") ? ASYNC_QUIET_MS : QUIET_MS) / 1000;
+  const latency = (Date.now() - startedAt) / 1000 - (task.tags.includes("async") ? ASYNC_QUIET_MS : QUIET_MS) / 1000;
   await sleep(500);
 
   const tokenRole = new Map<string, string>();
@@ -335,7 +340,8 @@ async function main(): Promise<void> {
   const dirty = spawnSync("git", ["-C", REPO, "status", "--porcelain", "--", "src", "pi-subagents/src"]).stdout.toString().trim() !== "";
   const meta = { variant: opts.variant, commit, dirty, repo: REPO, roles: ROLES, reps: Number(opts.reps), only: opts.only ?? null, pi_cli: PI_CLI, model: "fake/fake-model (scripted, zero tokens)", started: new Date().toISOString(), ended: "" };
   for (const task of tasks) {
-    for (let rep = 1; rep <= Number(opts.reps); rep++) {
+    const firstRep = Number(opts["first-rep"]);
+    for (let rep = firstRep; rep < firstRep + Number(opts.reps); rep++) {
       const row = await runTask(task, rep, variantDir);
       fs.appendFileSync(resultsFile, JSON.stringify(row) + "\n");
       console.log(`${task.id} r${rep}: ${row.status} complete=${(row.grade as { complete: number }).complete} ${JSON.stringify(row.checks)} ${(row.notes as string[]).join("; ")}`);
