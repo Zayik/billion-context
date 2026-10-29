@@ -69,33 +69,6 @@ for (const role of RESTRICTED_ROLES) {
   });
 }
 
-// ─── Worker: no --tools, full default toolset ─────────────────────────────
-
-test("buildChildArgs omits --tools for worker role", async () => {
-    const { cliArgs } = await buildChildArgs(
-      { agent: "worker", task: "fix bug" },
-      "You are a worker.",
-      mockCtx(),
-      "del_test",
-    );
-  assert.equal(getToolsValue(cliArgs), null, "worker does NOT receive --tools");
-});
-
-test("buildChildArgs worker still inherits provider/model from ctx", async () => {
-    const { cliArgs } = await buildChildArgs(
-      { agent: "worker", task: "fix bug" },
-      "prompt",
-      mockCtx(),
-      "del_test",
-    );
-  const providerIdx = cliArgs.indexOf("--provider");
-  const modelIdx = cliArgs.indexOf("--model");
-  assert.ok(providerIdx >= 0, "worker has --provider from ctx.model");
-  assert.equal(cliArgs[providerIdx + 1], "test");
-  assert.ok(modelIdx >= 0, "worker has --model from ctx.model");
-  assert.equal(cliArgs[modelIdx + 1], "test-model");
-});
-
 // ─── Unknown agent: no --tools ─────────────────────────────────────────────
 
 test("buildChildArgs omits --tools for unknown agent name", async () => {
@@ -144,7 +117,7 @@ test("buildChildArgs inherits model from ctx when model not specified", async ()
 
 test("buildChildArgs uses explicit model override when provided", async () => {
     const { cliArgs } = await buildChildArgs(
-      { agent: "worker", task: "test", model: "anthropic/claude-5" },
+      { agent: "reviewer", task: "test", model: "anthropic/claude-5" },
       "prompt",
       mockCtx(),
       "del_test",
@@ -182,9 +155,9 @@ function ctxWithRegistry(
 
 test("buildChildArgs model: per-call overrides role config", async () => {
   resetDelegateDefaults();
-  setDelegateDefaults({ agents: { worker: { model: "rolecfg/role-model" } } });
+  setDelegateDefaults({ agents: { reviewer: { model: "rolecfg/role-model" } } });
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t", model: "call/call-model" },
+    { agent: "reviewer", task: "t", model: "call/call-model" },
     "prompt", ctxWithRegistry({ provider: "parent", id: "parent-model" }, ["rolecfg/role-model"]), "del_m1",
   );
   assert.equal(flagVal(cliArgs, "--provider"), "call");
@@ -205,7 +178,7 @@ test("buildChildArgs model: role config used when no per-call model", async () =
 test("buildChildArgs model: inherits parent when neither per-call nor role config", async () => {
   resetDelegateDefaults();
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t" },
+    { agent: "reviewer", task: "t" },
     "prompt", ctxWithRegistry({ provider: "parent", id: "parent-model" }), "del_m3",
   );
   assert.equal(flagVal(cliArgs, "--provider"), "parent");
@@ -247,9 +220,9 @@ test("buildChildArgs model: slash in model id splits on first slash only", async
 
 test("buildChildArgs thinking: per-call wins over role and global", async () => {
   resetDelegateDefaults();
-  setDelegateDefaults({ thinkingLevel: "low", agents: { worker: { thinkingLevel: "medium" } } });
+  setDelegateDefaults({ thinkingLevel: "low", agents: { reviewer: { thinkingLevel: "medium" } } });
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t", thinkingLevel: "high" },
+    { agent: "reviewer", task: "t", thinkingLevel: "high" },
     "prompt", ctxWithRegistry({ provider: "p", id: "m" }), "del_t1",
   );
   assert.equal(flagVal(cliArgs, "--thinking"), "high");
@@ -257,9 +230,9 @@ test("buildChildArgs thinking: per-call wins over role and global", async () => 
 
 test("buildChildArgs thinking: role level wins over global", async () => {
   resetDelegateDefaults();
-  setDelegateDefaults({ thinkingLevel: "low", agents: { worker: { thinkingLevel: "medium" } } });
+  setDelegateDefaults({ thinkingLevel: "low", agents: { reviewer: { thinkingLevel: "medium" } } });
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t" },
+    { agent: "reviewer", task: "t" },
     "prompt", ctxWithRegistry({ provider: "p", id: "m" }), "del_t2",
   );
   assert.equal(flagVal(cliArgs, "--thinking"), "medium");
@@ -269,7 +242,7 @@ test("buildChildArgs thinking: global used when no per-call or role level", asyn
   resetDelegateDefaults();
   setDelegateDefaults({ thinkingLevel: "xhigh" });
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t" },
+    { agent: "reviewer", task: "t" },
     "prompt", ctxWithRegistry({ provider: "p", id: "m" }), "del_t3",
   );
   assert.equal(flagVal(cliArgs, "--thinking"), "xhigh");
@@ -278,7 +251,7 @@ test("buildChildArgs thinking: global used when no per-call or role level", asyn
 test("buildChildArgs thinking: no flag when nothing configured (Pi default preserved)", async () => {
   resetDelegateDefaults();
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t" },
+    { agent: "reviewer", task: "t" },
     "prompt", ctxWithRegistry({ provider: "p", id: "m" }), "del_t4",
   );
   assert.equal(flagVal(cliArgs, "--thinking"), null);
@@ -286,9 +259,9 @@ test("buildChildArgs thinking: no flag when nothing configured (Pi default prese
 
 test("buildChildArgs thinking: invalid value dropped without cascading to global", async () => {
   resetDelegateDefaults();
-  setDelegateDefaults({ thinkingLevel: "low", agents: { worker: { thinkingLevel: "bogus" } } });
+  setDelegateDefaults({ thinkingLevel: "low", agents: { reviewer: { thinkingLevel: "bogus" } } });
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t" },
+    { agent: "reviewer", task: "t" },
     "prompt", ctxWithRegistry({ provider: "p", id: "m" }), "del_t5",
   );
   assert.equal(flagVal(cliArgs, "--thinking"), null);
@@ -298,7 +271,7 @@ test("buildChildArgs thinking: invalid per-call dropped even if global is valid"
   resetDelegateDefaults();
   setDelegateDefaults({ thinkingLevel: "low" });
   const { cliArgs } = await buildChildArgs(
-    { agent: "worker", task: "t", thinkingLevel: "not-a-level" },
+    { agent: "reviewer", task: "t", thinkingLevel: "not-a-level" },
     "prompt", ctxWithRegistry({ provider: "p", id: "m" }), "del_t6",
   );
   assert.equal(flagVal(cliArgs, "--thinking"), null);
@@ -355,7 +328,7 @@ test("injectedWaitMessage surfaces remaining delegates and tolerates a missing f
 
 test("buildChildArgs uses --mode json on pi for async delegates", async () => {
   const { cliArgs, isAsync, useJsonStream } = await buildChildArgs(
-    { agent: "worker", task: "test" },
+    { agent: "reviewer", task: "test" },
     "prompt",
     mockCtx("pi"),
     "del_test",
@@ -367,7 +340,7 @@ test("buildChildArgs uses --mode json on pi for async delegates", async () => {
 
 test("buildChildArgs falls back to -p on omp for async delegates", async () => {
   const { cliArgs, isAsync, useJsonStream } = await buildChildArgs(
-    { agent: "worker", task: "test" },
+    { agent: "reviewer", task: "test" },
     "prompt",
     mockCtx("omp"),
     "del_test",
@@ -381,7 +354,7 @@ test("buildChildArgs keeps -p for sync delegates even on pi", async () => {
   const ctx = mockCtx("pi") as ExtensionContext & { mode: string };
   ctx.mode = "print";
   const { cliArgs, isAsync, useJsonStream } = await buildChildArgs(
-    { agent: "worker", task: "test" },
+    { agent: "reviewer", task: "test" },
     "prompt",
     ctx,
     "del_test",
@@ -724,7 +697,7 @@ test("async delegate with missing cwd injects FAILED instead of crashing the hos
 
 test("buildChildArgs pi host uses --session with a deterministic path (no --no-session)", async () => {
   const { cliArgs, sessionFile } = await buildChildArgs(
-    { agent: "worker", task: "test" },
+    { agent: "reviewer", task: "test" },
     "prompt",
     mockCtx("pi"),
     "del_sess",
@@ -741,7 +714,7 @@ test("buildChildArgs pi host uses --session with a deterministic path (no --no-s
 
 test("buildChildArgs omp host keeps --no-session and no sessionFile", async () => {
   const { cliArgs, sessionFile } = await buildChildArgs(
-    { agent: "worker", task: "test" },
+    { agent: "reviewer", task: "test" },
     "prompt",
     mockCtx("omp"),
     "del_sess",
@@ -753,7 +726,7 @@ test("buildChildArgs omp host keeps --no-session and no sessionFile", async () =
 
 test("buildChildArgs resumeFrom targets the new run's session file", async () => {
   const { cliArgs, sessionFile } = await buildChildArgs(
-    { agent: "worker", resumeFrom: "del_orig" },
+    { agent: "reviewer", resumeFrom: "del_orig" },
     "prompt",
     mockCtx("pi"),
     "del_new",

@@ -132,22 +132,17 @@ export function resolvePiCliEntry(
   return argv1;
 }
 
-/** ACP context-management tools that every restricted delegate must retain
+/** ACP context-management tools that every delegate must retain
  *  so it can manage its own context under billion-context-pi. */
 const ACP_TOOLS = ["compress", "decompress", "search_context", "acp_status"] as const;
 
-/** Roles that receive a restricted tool allowlist. Worker is intentionally
- *  absent - it runs on Pi's full default toolset (all extension/custom tools
- *  stay active) so primary-task delegation is not degraded. */
+/** Read-only tool allowlist shared by every role; the main agent is the sole writer. */
 const RESTRICTED_TOOLS = "read,bash,grep,find,ls";
 
 interface AgentDef {
   prompt: string;
+  /** Passed as the child's `--tools` allowlist, with ACP context tools appended. */
   tools: string;
-  /** When true, the role's `tools` are passed as a `--tools` allowlist to the
-   *  child process, and ACP context tools are automatically appended. When
-   *  absent/false, the child runs on Pi's full default toolset. */
-  restricted?: boolean;
 }
 
 // Minimal roster. The tool description lists these so the model knows how to
@@ -155,14 +150,12 @@ interface AgentDef {
 const AGENTS: Record<string, AgentDef> = {
   reviewer: {
     tools: RESTRICTED_TOOLS,
-    restricted: true,
     prompt: `You are a senior code reviewer with read-only access.
 Read the given code and report: bugs, security/safety risks, correctness issues, and concrete improvement suggestions.
 Be specific — cite file:line for every finding. Do NOT modify any files; only read and report.`,
   },
   researcher: {
     tools: RESTRICTED_TOOLS,
-    restricted: true,
     prompt: `You have read-only access. Investigate the codebase and answer in the form the task asks for:
 - findings: exact file:line references, function/type signatures, and relevant code snippets;
 - a plan: a concrete, ordered step-by-step implementation plan with the rationale for each step;
@@ -691,7 +684,7 @@ const agentListLine = (name: string): string => {
     reviewer: "read-only code review (bugs/risks, file:line)",
     researcher: "read-only investigation: explore code, propose a step-by-step plan, or answer a question",
   };
-  return `  • ${name} - ${blurb[name]} [tools: ${def.tools}${def.restricted ? " + ACP context tools" : ""}]`;
+  return `  • ${name} - ${blurb[name]} [tools: ${def.tools} + ACP context tools]`;
 };
 
 export function makeDelegateTool(pi: ExtensionAPI): ToolDefinition<typeof DelegateParams, DelegateRenderMeta> {
@@ -1857,13 +1850,11 @@ export async function buildChildArgs(
     ? ["--mode", "json", ...sessionArgs, "--append-system-prompt", promptFile]
     : ["-p", ...sessionArgs, "--append-system-prompt", promptFile];
 
-  // Restricted roles receive a tailored --tools allowlist. Worker and
-  // unknown agents are left on Pi's full default toolset (all extension/
-  // custom tools stay active). The allowlist is a *soft guardrail*: it
-  // prevents accidental edit/write by read-only roles, but bash can bypass
-  // it - this is not a security boundary.
+  // Every role receives its --tools allowlist. The allowlist is a *soft
+  // guardrail*: it prevents accidental edit/write, but bash can bypass it -
+  // this is not a security boundary.
   const agentDef = AGENTS[args.agent];
-  if (agentDef?.restricted) {
+  if (agentDef) {
     const merged = [...new Set([...agentDef.tools.split(",").map(s => s.trim()), ...ACP_TOOLS])];
     cliArgs.push("--tools", merged.join(","));
   }
