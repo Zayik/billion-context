@@ -52,7 +52,7 @@ Three built-in roles, each with a system prompt and a **soft tool guardrail**. E
 | `researcher` | read, bash, grep, find, ls + ACP | A large lookup whose raw material the main agent will not need afterwards |
 | `worker` | read, edit, write, bash | A pre-scoped edit that runs in parallel with other, disjoint work |
 
-Read-only roles receive a restricted tool allowlist plus ACP context tools so they can manage their own context. This prevents accidental file modifications, but `bash` can bypass it — **it is a guardrail, not a security boundary**. Worker runs on Pi's full default toolset (any loaded extension or custom tools stay available).
+Read-only roles receive a restricted tool allowlist plus ACP context tools so they can manage their own context. The reviewer also starts with `--no-skills` (on pi hosts): a review needs the repo's files and the brief, not the skill list, so it does not pay for every skill description in its prompt. Skills never grant tools, so this does not change what the reviewer can reach. This prevents accidental file modifications, but `bash` can bypass it — **it is a guardrail, not a security boundary**. Worker runs on Pi's full default toolset (any loaded extension or custom tools stay available).
 
 ### Execution model
 
