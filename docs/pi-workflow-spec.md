@@ -45,6 +45,7 @@ The skills were the larger offender: `/implement-spec` delegated exploration, ev
 | D5 | A successful run returns the delegate's final reply inline (capped, ~6k chars), keeping the file path for the full text. |
 | D6 | The tool description and guidelines are rewritten around the three conditions: no "launch several", no route-by-kind table, and "brief with findings, not pointers: the child must not re-read what you already read". Description, parameter descriptions and the `ACP_DELEGATE_PROMPT` section are trimmed to roughly half; before/after sizes are recorded below and pinned by a test. |
 | D7 | bili's compression tools are untouched (golden-pinned, kernel-owned). Making the delegate tools `deferred` behind pi's `tool_search` is a follow-up. |
+| D8 | `reviewer` children start with `--no-skills` (pi hosts only): a review never loads a skill, and each child otherwise carries every skill description. `researcher` and `worker` keep their skills (a lookup may need one; a worker builds with `tdd`). Skills grant no tools, so this changes nothing a reviewer can reach, including web access. |
 
 ### Where each phase runs
 
@@ -61,7 +62,7 @@ The skills were the larger offender: `/implement-spec` delegated exploration, ev
 
 - The original skills never trigger a handoff (`handoff` is `disable-model-invocation: true`; `implement-spec` mentions neither handoff nor `/compact`). None is added.
 - `/implement-spec` folds each finished ticket at its boundary (one summary: commit, what changed, mid-build decisions, gotchas). It does not fold mid-ticket unless bili nudges.
-- Before each ticket it recovers the ticket's decisions and any still-valid earlier reading from folds with narrow `search_context` queries, re-folds what it decompressed, and reads only what is missing or stale. A file changed since it was folded (per `git diff` / `git log`) is re-read, never decompressed and edited against.
+- Before each ticket it recovers the ticket's decisions and any still-valid earlier reading from folds. `search_context` searches fold summaries, so it comes first; exact wording comes from restoring only the range needed (`startId`/`endId`), or a block with `toFile` read selectively. A default restore arrives as a tool result (`src/decompress-shared.ts`), not an in-place rewrite, so it lands inside the current ticket and that ticket's fold absorbs it: nothing is folded twice. It reads only what is missing or stale. A file changed since it was folded (per `git diff` / `git log`) is re-read, never decompressed and edited against.
 - No token cap triggers anything. Pi's auto-compaction is already cancelled by bili (`src/agent/pi.ts`, #535); manual `/compact` is not used during skill runs.
 - With bili, "continue" covers far more than Pocock's ~150k smart zone; `/new` is for isolation, `/handoff` for portability. `ask-matt` is updated to say so.
 
@@ -116,6 +117,7 @@ The largest fixed cost is billion-context's own compression prompt (≈ 11.3k ch
 - A third-party `pi-subagents` package installed at **user** scope stays active beside `acp_delegate` (only a project-scope install stands it down, #415), and bili's lane does not warn.
 - `pi-subagents` develops against pi 0.83.0; the target machine runs pi 1.4.0. Structural checks are run against 1.4.0.
 - Skills outside the two paths (`research`, `retro`, `triage`, `wayfinder`, `codebase-design`, `improve-codebase-architecture`, `grill-me`, `writing-for-agents`, in-progress and misc) still carry Claude Code wording. `ask-matt` still routes to `research`'s background-agent model.
+- Each delegate child starts with ≈ 27k chars of fixed prompt (measured on pi 1.4.0: system prompt 18.8k including bili's compression prompt and, except for reviewers, the skill list; tools 8.5k), plus the project's own context files (`AGENTS.md` here is ≈ 60 KB). A two-reviewer `/code-review` therefore pays a sizable fixed cost before reading the diff.
 - bili's compression prompt (above) is the biggest fixed cost per call; the delegate tools could also move behind pi's `tool_search` (`exposure: "deferred"`). Both are follow-ups.
 - `tests/e2e/e2e-delegate-notify.test.ts` and the other native-pi e2e suites skip on Windows: they spawn `pi` without a shell, and pi's Windows entry is a `.cmd` shim. They run on the Linux CI lanes.
 
