@@ -850,7 +850,7 @@ Top-level keys that control how the proxy listens and behaves globally.
     "syncTimeoutMinutes": 5,     // hard timeout for sync delegates; 0/null disables
     "idleTimeoutMinutes": 5,     // idle watchdog for async delegates; 0/null disables (warns)
     "asyncTimeoutMinutes": 30,   // hard limit for async delegates; 0/null disables
-    "maxConcurrent": 4,          // cap on concurrent background delegates (default unlimited; extras queue)
+    "maxConcurrent": 3,          // cap on concurrent background delegates (default 3; extras queue)
     "thinkingLevel": "medium",   // off|minimal|low|medium|high|xhigh|max; priority per-call > role > this > pi default
     "agents": {                  // per-role defaults: { model: "provider/id", thinkingLevel: "…" }
       "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" }
@@ -872,7 +872,7 @@ Top-level keys that control how the proxy listens and behaves globally.
 | `PI_ACP_DELEGATE_SYNC_TIMEOUT_MINUTES` | `pi.subagents.syncTimeoutMinutes` | `0` disables; negative/non-numeric warns and falls back. |
 | `PI_ACP_DELEGATE_IDLE_TIMEOUT_MINUTES` | `pi.subagents.idleTimeoutMinutes` | `0` disables (warns — hung children then need `acp_delegate_cancel`). |
 | `PI_ACP_DELEGATE_ASYNC_TIMEOUT_MINUTES` | `pi.subagents.asyncTimeoutMinutes` | `0` disables. |
-| `PI_ACP_DELEGATE_MAX_CONCURRENT` | `pi.subagents.maxConcurrent` | Integer ≥ 1; invalid falls through to the file value, then unlimited. |
+| `PI_ACP_DELEGATE_MAX_CONCURRENT` | `pi.subagents.maxConcurrent` | Integer ≥ 1; invalid falls through to the file value, then the default (3). |
 
 Changes take effect on a **new session** (tools register at session start). Full delegate surface docs (roles, execution model, fleet inspector): [billion-context-pi-subagents README](pi-subagents/README.md).
 
