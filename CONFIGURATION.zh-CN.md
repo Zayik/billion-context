@@ -847,7 +847,7 @@
     "syncTimeoutMinutes": 5,     // 同步 delegate 硬超时；0/null 关闭
     "idleTimeoutMinutes": 5,     // 异步 delegate 空闲看门狗；0/null 关闭（告警）
     "asyncTimeoutMinutes": 30,   // 异步 delegate 硬时限；0/null 关闭
-    "maxConcurrent": 4,          // 后台并发上限（默认无限；超出排队）
+    "maxConcurrent": 3,          // 后台并发上限（默认 3；超出排队）
     "thinkingLevel": "medium",   // off|minimal|low|medium|high|xhigh|max；优先级 每次调用 > 角色 > 此处 > pi 默认
     "agents": {                  // 角色默认：{ model: "provider/id", thinkingLevel: "…" }
       "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" }
@@ -869,7 +869,7 @@
 | `PI_ACP_DELEGATE_SYNC_TIMEOUT_MINUTES` | `pi.subagents.syncTimeoutMinutes` | `0` 关闭；负数/非数字告警并回退。 |
 | `PI_ACP_DELEGATE_IDLE_TIMEOUT_MINUTES` | `pi.subagents.idleTimeoutMinutes` | `0` 关闭（告警 —— 挂死子进程需 `acp_delegate_cancel`）。 |
 | `PI_ACP_DELEGATE_ASYNC_TIMEOUT_MINUTES` | `pi.subagents.asyncTimeoutMinutes` | `0` 关闭。 |
-| `PI_ACP_DELEGATE_MAX_CONCURRENT` | `pi.subagents.maxConcurrent` | ≥1 整数；非法值回落到文件值，再回落到无限。 |
+| `PI_ACP_DELEGATE_MAX_CONCURRENT` | `pi.subagents.maxConcurrent` | ≥1 整数；非法值回落到文件值，再回落到默认值（3）。 |
 
 修改在**新会话**生效（工具在会话启动时注册）。完整 delegate 面文档（角色、执行模型、fleet 检查器）见 [billion-context-pi-subagents README](pi-subagents/README.md)。
 
