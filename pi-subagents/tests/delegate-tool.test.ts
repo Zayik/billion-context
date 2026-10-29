@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, delegationAllowedAtDepth, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot } from "../src/delegate-tool.js";
+import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, delegationAllowedAtDepth, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, formatCompletedPayload, INLINE_RESULT_CHARS, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot } from "../src/delegate-tool.js";
 import { DEFAULT_DELEGATE_POLICY, resolveDelegate } from "../src/config.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -553,14 +553,15 @@ test("injectResult failed run uses a loud FAILED header and carries the error ex
   assert.ok(text.includes("NOT a user message"), "marked automated, not a user message");
 });
 
-test("injectResult completed run keeps the completed header and no body", () => {
+test("injectResult completed run keeps the completed header and carries the reply inline", () => {
   const sent: string[] = [];
-  const ok = injectResult(capturePi(sent) as any, "reviewer", "del_x", "review auth", "completed", 0, "/tmp/del_x.out", undefined, undefined, "separate", false, "must not appear");
+  const ok = injectResult(capturePi(sent) as any, "reviewer", "del_x", "review auth", "completed", 0, "/tmp/del_x.out", undefined, undefined, "separate", false, "the review findings");
   assert.equal(ok, true, "injection succeeds");
   const text = sent[0]!;
   assert.ok(text.includes("[acp_delegate completed]"), "completed header unchanged");
   assert.ok(!text.includes("FAILED"), "no FAILED marker");
-  assert.ok(!text.includes("must not appear"), "completed runs carry no body");
+  assert.ok(text.includes("the review findings"), "completed runs carry their reply inline");
+  assert.ok(!text.includes("Output:"), "the reply is not presented as an error excerpt");
 });
 
 test("completed notification declares it ends no task and grants no new scope (#2750)", () => {
@@ -1009,9 +1010,36 @@ test("formatBatchRunSection carries the timeout note and error excerpt", () => {
   assert.ok(section.includes("(timed out: no output for 5m)"), "timeout note");
   assert.ok(section.includes("Error: provider 429"), "error excerpt");
   assert.ok(section.includes("/tmp/del_t.out"), "result file path");
-  const ok = formatBatchRunSection(mkRun("del_ok", "completed", { result: { code: 0, file: "/tmp/del_ok.out", body: "hidden" } }));
+  const ok = formatBatchRunSection(mkRun("del_ok", "completed", { result: { code: 0, file: "/tmp/del_ok.out", body: "the review" } }));
   assert.ok(ok.includes("[acp_delegate completed]"), "completed status");
-  assert.ok(!ok.includes("hidden"), "completed runs carry no body");
+  assert.ok(ok.includes("the review"), "completed runs carry their reply inline");
+  assert.ok(!ok.includes("Activity log"), "completed runs carry no activity log pointer");
+});
+
+test("formatCompletedPayload: a reply comes back inline; only an oversized one is cut and points at the file", () => {
+  const short = formatCompletedPayload("H", "/tmp/r.out", "task", "  finding at a.ts:3  ");
+  assert.ok(short.includes("Result:\n~~~\nfinding at a.ts:3\n~~~"), "trimmed reply inline");
+  assert.ok(short.includes("no need to read the file"), "complete reply says the file adds nothing");
+  assert.ok(!short.includes("Truncated"), "short reply is not cut");
+
+  const long = formatCompletedPayload("H", "/tmp/r.out", "task", "x".repeat(INLINE_RESULT_CHARS + 50));
+  assert.ok(long.includes(`Truncated at ${INLINE_RESULT_CHARS} chars. Full result: \`/tmp/r.out\``), "oversized reply points at the file");
+  assert.ok(!long.includes("x".repeat(INLINE_RESULT_CHARS)), "oversized reply is cut below the cap");
+
+  const none = formatCompletedPayload("H", "/tmp/r.out", "task", "   ");
+  assert.ok(!none.includes("Result:"), "no reply: no empty result block");
+  assert.ok(none.includes("Full result: `/tmp/r.out`"), "no reply: falls back to the file pointer");
+});
+
+test("completed result paths agree: sync, wait and notification all carry the reply inline", () => {
+  const run = mkRun("del_inline", "completed", { result: { code: 0, file: "/tmp/del_inline.out", body: "REPLY-BODY" } });
+  assert.ok(formatRunResult(run).includes("REPLY-BODY"), "wait path");
+  const sent: string[] = [];
+  injectResult(capturePi(sent) as any, run.agent, run.runId, run.task, run.status, 0, run.result.file, undefined, undefined, "separate", false, "REPLY-BODY");
+  assert.ok(sent[0]!.includes("REPLY-BODY"), "notification path");
+  assert.ok(sent[0]!.includes("Fold the result below into your work"), "notification no longer sends the model to the file");
+  const failed = mkRun("del_fail", "failed", { result: { code: 1, file: "/tmp/del_fail.out", body: "E".repeat(2000) } });
+  assert.ok(!formatRunResult(failed).includes("E".repeat(600)), "failed runs keep the short error excerpt");
 });
 
 test("roster: reviewer, researcher and worker remain; planner and oracle are gone", async () => {
