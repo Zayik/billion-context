@@ -164,7 +164,7 @@ Merges first, then folds, then as-tool changes. With no traffic data, the order 
 lowest risk up.
 
 - [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); kept
-- [x] 2. fold `worker` (remove the role; the main agent edits itself) · variant: v2 · compared with: v1 · result: holds (10/11 both sides); decision pending
+- [x] 2. fold `worker` (remove the role; the main agent edits itself) · variant: v2 · compared with: v1 · result: holds (10/11 both sides); kept
 - [ ] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: · compared with: · result:
 - [ ] 4. merged investigator as-tool: structured result · variant: · compared with: · result:
 
@@ -248,11 +248,12 @@ Tokens used next to the estimate: zero (scripted model).
 - **Checked with no model:**
   - `npm --prefix pi-subagents test` 262/262. The roster test now also rejects `worker`, and it fails on the old code.
   - Typecheck clean; `pi-subagents-wiring` 18/18, `pi-subagent-channel` 15/15.
-- **Kept unused until keep:** the unrestricted-toolset branch in `buildChildArgs` (`delegate-tool.ts`, "Worker and unknown agents are left on Pi's full default toolset") and its unit tests ("omits --tools for worker role", etc.). No model can reach it: `execute()` rejects unknown agents first. Delete them after keep; that is the cleanup commit.
+- **Cleanup after keep** (commit after b5de41f1): removed the `restricted` flag and the unrestricted-toolset branch, plus the two worker-only unit tests. Model/thinking resolution tests that borrowed the name `worker` now use `reviewer`. The unit suite is 260/260. Checked that nothing a model sees changed: rerun of t01, t05 and t11 (variant `cleanup-check`), and the system prompt + tool definitions of all 16 main and child requests are byte-identical to v2 (run ids, temp paths and dates masked).
+- **Was kept unused until keep:** the unrestricted-toolset branch in `buildChildArgs` (`delegate-tool.ts`, "Worker and unknown agents are left on Pi's full default toolset") and its unit tests ("omits --tools for worker role", etc.). No model can reach it: `execute()` rejects unknown agents first. Delete them after keep; that is the cleanup commit.
 - **Skipped or not measured:**
   - Cost creep from real edits now landing in main's own context: the scripted edit is one tiny write. This is the main risk of the fold, and it needs a live model.
   - Shortcut and wrong pick: unmeasured, same as before.
-- **Decision (who, when):** pending.
+- **Decision (who, when):** keep: the person, 2026-10-28 ("keep and go on. This follows anthropics folding of subagents into the main agent"). They asked whether losing a parallel worker limits us; see the next open question.
 
 ## Open questions for owners
 
@@ -262,6 +263,7 @@ Tokens used next to the estimate: zero (scripted model).
 4. **Read-only enforcement:** should the read-only roles get a real guardrail (no `bash`, or a read-only bash), or is a prompt-only limit acceptable?
 5. **Researcher context size:** could the main agent's own `grep`/`read` return less, making `fold` better than keeping a clean-context investigator?
 6. **Who signs off on pi-lane behavior changes?** No CODEOWNERS file exists, and the git authors are bots (ework-agent, awork) plus ranxianglei.
+8. **Parallel writes (raised by the person 2026-10-28).** With `worker` folded, nothing can implement in parallel. What was lost is narrower than it looks: the old worker had no isolation. It wrote into the same cwd as main and every other worker, with no merge step, so two parallel workers could clobber each other. If traces or a live-model eval show real demand, the safer shape is a new `as-tool` implementer that works in its own git worktree and returns a patch for main to apply, so main stays the sole writer and conflicts surface at apply time. That would be a new design with its own eval tasks (two disjoint edits in parallel; two overlapping edits), not a revert.
 7. **"Custom role" doc drift:** `config.ts:76-77` says `delegate.agents` accepts "any custom role", but `acp_delegate` rejects any name outside the five built-ins (`delegate-tool.ts:1435-1437`). Either the comment is wrong or a feature is missing. This is a small doc fix, separate from this plan.
 
 ## Left as it is, and why
