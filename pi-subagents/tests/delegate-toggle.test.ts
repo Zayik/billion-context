@@ -101,6 +101,29 @@ test("delegate toggle: default config keeps the acp_delegate tools and prompt se
     });
 });
 
+test("depth cap: a child at maxDepth registers no delegate tools and no prompt section", async () => {
+    const prev = process.env.PI_ACP_DELEGATE_DEPTH;
+    process.env.PI_ACP_DELEGATE_DEPTH = "1";
+    try {
+        await withConfigs(undefined, undefined, async (cwd) => {
+            const { api, handlers } = captureApi();
+            createSubagentsExtension({ ...ADAPTER })(api as any);
+            const { tools, systemPrompt } = await boot(api, handlers, cwd);
+            for (const name of DELEGATE_TOOLS) assert.ok(!tools.includes(name), `${name} must not be registered at the cap`);
+            assert.ok(!systemPrompt.includes(DELEGATE_PROMPT_MARKER), "delegate prompt section must be gone at the cap");
+        });
+        await withConfigs({ delegate: { maxDepth: 2 } }, undefined, async (cwd) => {
+            const { api, handlers } = captureApi();
+            createSubagentsExtension({ ...ADAPTER })(api as any);
+            const { tools } = await boot(api, handlers, cwd);
+            for (const name of DELEGATE_TOOLS) assert.ok(tools.includes(name), `${name} registered below a raised cap`);
+        });
+    } finally {
+        if (prev === undefined) delete process.env.PI_ACP_DELEGATE_DEPTH;
+        else process.env.PI_ACP_DELEGATE_DEPTH = prev;
+    }
+});
+
 test("delegate toggle: global {\"delegate\": false} drops the tools and the prompt section", async () => {
     await withConfigs({ delegate: false }, undefined, async (cwd) => {
         const { api, handlers } = captureApi();

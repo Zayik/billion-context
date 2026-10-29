@@ -78,7 +78,7 @@ or object form:
 {
   "delegate": {
     "enabled": true,
-    "maxDepth": 2,
+    "maxDepth": 1,
     "maxConcurrent": 3,
     "syncTimeoutMinutes": 5,
     "idleTimeoutMinutes": 5,
@@ -102,7 +102,7 @@ or object form:
 | `delegate.enabled` | boolean | `true` | Same as above, object form. |
 | `delegate.forceEnable` | boolean | `false` | Keep `acp_delegate` active even when a project-scope pi-subagents install would otherwise stand it down (#415). Env `PI_ACP_DELEGATE_FORCE_ENABLE=true/false` overrides. |
 | `delegate.displayUsage` | `"separate" \| "merged"` | `"separate"` | `"separate"`: delegate tokens tracked outside the main session totals (own footer block). `"merged"`: folded into the tool-result usage field. Legacy flat alias: top-level `"displayUsage"`. |
-| `delegate.maxDepth` | number | `2` | Max nesting depth (main → child → grandchild). `1` = no nested delegation. Propagated to children via `PI_ACP_DELEGATE_MAX_DEPTH`. Env override: `PI_ACP_DELEGATE_MAX_DEPTH`. |
+| `delegate.maxDepth` | number | `1` | Max nesting depth. `1` = no nested delegation: a child at the cap registers no delegate tools or prompt section. `2` lets a child delegate once more (main → child → grandchild). Propagated to children via `PI_ACP_DELEGATE_MAX_DEPTH`. Env override: `PI_ACP_DELEGATE_MAX_DEPTH`. |
 | `delegate.syncTimeoutMinutes` | number \| null | `5` | Hard timeout for synchronous delegates. `0`/`null` disables. Env: `PI_ACP_DELEGATE_SYNC_TIMEOUT_MINUTES`. |
 | `delegate.idleTimeoutMinutes` | number \| null | `5` | Idle watchdog for async delegates (kill when no output). `0`/`null` disables (warns — hung children must then be cancelled manually via `acp_delegate_cancel`). Env: `PI_ACP_DELEGATE_IDLE_TIMEOUT_MINUTES`. |
 | `delegate.asyncTimeoutMinutes` | number \| null | `30` | Hard time limit for async delegates. `0`/`null` disables. Env: `PI_ACP_DELEGATE_ASYNC_TIMEOUT_MINUTES`. |

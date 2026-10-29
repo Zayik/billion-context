@@ -74,6 +74,14 @@ export function delegateSpawnOptions(cwd: string, env: NodeJS.ProcessEnv): Spawn
 /** Child process env for a nested delegate: depth increments by one, and the
  *  resolved maxDepth rides along so the cap binds the whole delegation tree
  *  even when the child loads a different project acp.json. */
+/** Whether THIS process may launch delegates: its own nesting depth (0 = the
+ *  main agent) must sit below the cap. A process at the cap registers no
+ *  delegate tools at all, so a child never pays their prompt cost or nests. */
+export function delegationAllowedAtDepth(maxDepth: number): boolean {
+  const depth = Number(process.env.PI_ACP_DELEGATE_DEPTH ?? "0");
+  return !Number.isNaN(depth) && depth < maxDepth;
+}
+
 export function delegateChildEnv(parentDepth: number, maxDepth: number): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -1423,7 +1431,7 @@ async function runDelegate(
   }
   const parentDepth = Number(process.env.PI_ACP_DELEGATE_DEPTH ?? "0");
   const maxDepth = delegatePolicy.maxDepth;
-  if (Number.isNaN(parentDepth) || parentDepth >= maxDepth) {
+  if (!delegationAllowedAtDepth(maxDepth)) {
     return errorResult(`Delegate nesting limit reached (depth ${parentDepth}, max ${maxDepth}). The delegate cannot spawn further delegates.`);
   }
   if (!args.task || !args.task.trim()) {

@@ -846,7 +846,7 @@
     "enabled": true,              // 总开关；false（或 "subagents": false）移除工具+提示词+快捷键（新会话生效）
     "forceEnable": false,        // 检测到项目级 pi-subagents 安装时仍保留 acp_delegate（#415）
     "displayUsage": "separate",  // "separate"（独立 footer 块）| "merged"（并入工具结果用量）
-    "maxDepth": 2,               // 嵌套深度上限，向子进程传播
+    "maxDepth": 1,               // 嵌套深度上限，向子进程传播（默认 1：子进程不注册委托工具）
     "syncTimeoutMinutes": 5,     // 同步 delegate 硬超时；0/null 关闭
     "idleTimeoutMinutes": 5,     // 异步 delegate 空闲看门狗；0/null 关闭（告警）
     "asyncTimeoutMinutes": 30,   // 异步 delegate 硬时限；0/null 关闭
