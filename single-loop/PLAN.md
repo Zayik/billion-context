@@ -165,7 +165,7 @@ lowest risk up.
 
 - [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); kept
 - [x] 2. fold `worker` (remove the role; the main agent edits itself) · variant: v2 · compared with: v1 · result: holds (10/11 both sides); kept
-- [ ] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: · compared with: · result:
+- [x] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: v3 · compared with: v2 · result: holds (13/14 vs 10/14 on the extended set); decision pending
   - **Blocked before building (2026-10-28), waiting on the person:**
     - (a) **Conflicts with a deliberate design.** The minimal payload is on purpose: `formatPayload` puts "NO preview: the model uses `read` for details … Keeping this minimal means it stays cheap to retain in context" (`delegate-tool.ts`, above `formatPayload`; #2546 made notifications persisted session messages). An inline structured result grows every later main call.
     - (b) **The eval can't see the change.** The scripted child always replies `收到#done`, so a schema check in code would only ever exercise the malformed path, never the happy one.
@@ -258,6 +258,46 @@ Tokens used next to the estimate: zero (scripted model).
   - Cost creep from real edits now landing in main's own context: the scripted edit is one tiny write. This is the main risk of the fold, and it needs a live model.
   - Shortcut and wrong pick: unmeasured, same as before.
 - **Decision (who, when):** keep: the person, 2026-10-28 ("keep and go on. This follows anthropics folding of subagents into the main agent"). They asked whether losing a parallel worker limits us; see the next open question.
+
+### Item 3: `reviewer` returns a checked structured result (variant `v3`, branch `2026-10-28_reviewer-structured-result`, commit dd66c077, stacked on item 2)
+
+The person approved the "structured result file" shape (2026-10-28, "Do it"):
+- the reply goes to the result file verbatim, as before
+- code checks its last ```json block against `SubagentResponse` (`pi-subagents/src/result-shape.ts`)
+- the payload gains ONE line: "Result shape: checked (confidence …; N evidence items, M caveats)." or "Result shape: NOT checked — … (reason). Treat its findings as low confidence and unverified."
+- no inline conclusion, so the deliberate minimal-payload design holds
+
+**Eval extended before the change:**
+- The fake upstream gained a `请回复<<<text>>>` scripted-final-reply marker (commit 5384d72c).
+- New tasks: t12 (good JSON, sync), t13 (plain text, sync, unhappy path), t14 (good JSON, async).
+- They ran on the unchanged v2 code first: 0/2 each, with handoff_out passing and only `result_shape` failing, as expected. Those rows sit in v2 (code e9a3b3db, byte-identical model surface to v2's b5de41f1).
+
+Comparison with `v2` (`compare.py ... v2 v3 --exclude main`):
+
+| | v2 | v3 | change |
+| --- | ---: | ---: | ---: |
+| tasks complete | 10/14 | 13/14 | +3 (t12, t13, t14) |
+| latency per task (s) | 2.8 | 2.8 | −1% |
+| model calls per task | 4.3 | 4.3 | 0 |
+| input tokens per task | 33,282 | 33,508 | +0.7% |
+
+- **Tasks that changed score:** t12, t13 and t14 went from 0/2 to 2/2, the new capability. Nothing got worse; t07 still fails (known gap).
+- **Routes and writes:** no route or write changed on any task.
+- **Going in** (traces, all 4 reviewer tasks checked): every reviewer child's system prompt carries the caller note and the result-format instruction. The reviewer child costs 6,699 input tokens per call, against 6,525 before (+174).
+- **Coming out:**
+  - t12 and t14 deliver "Result shape: checked (confidence high; 1 evidence item, 1 caveat)" to main, sync and through the async notification.
+  - t13 delivers the NOT-checked line with its reason ("no json block").
+  - t11's batched notification carries the line for the reviewer only; the researcher run has none, as intended. Conclusion and caveats stay in the result file, so main has to `read` it to repeat them. That was the agreed trade.
+- **Edited in the main agent's prompt and tool list:** nothing. Main's first call is 7,432 tokens on both sides. Main only sees the one payload line, on completed reviewer runs.
+- **Checked with no model:**
+  - `npm --prefix pi-subagents test` 265/265. The new `result-shape.test.ts` covers the good result, last-block-wins, and 8 malformed shapes each refused with its reason, plus a payload line for completed reviewer runs only (none for researcher, none on failure, no inline `Output:`).
+  - typecheck clean; wiring 18/18, channel 15/15.
+- **Skipped:**
+  - Required brief fields (step 4.6): `acp_delegate` is shared by both roles, so a reviewer-only required field would change the tool schema for every call. Free-text `task` stays.
+  - Letting main check the conclusion (step 4.5): main already holds `read`/`grep`, so nothing to add.
+- **Not measured:** whether a real model follows the JSON instruction. If it often doesn't, every review arrives flagged "low confidence", and main may start redoing reviews (repeated work) or distrusting good ones. Needs a live model.
+- **What this does not fix** (revisit at the next model upgrade): the reviewer keeps its own prompt; each call still hands back a summary that loses detail; each call is a nested model loop (latency); and main must `read` the file to see the conclusion.
+- **Decision (who, when):** pending.
 
 ## Open questions for owners
 
