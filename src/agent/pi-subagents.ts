@@ -17,6 +17,7 @@ import {
     DELEGATE_PROMPT_SECTION,
     DELEGATE_STAND_DOWN_MESSAGE,
     delegateStatusWidget,
+    delegationAllowedAtDepth,
     findPiSubagentsInstalls,
     loadSubagentsUserConfig,
     makeDelegateCancelTool,
@@ -99,7 +100,7 @@ export function wirePiSubagents(pi: ExtensionAPI, agent: string): void {
     markEmbedded();
 
     const piCast = pi as unknown as PiExtensionAPI;
-    const state = { policy: DEFAULT_DELEGATE_POLICY as DelegatePolicy, stoodDown: false, delegatePrompt: undefined as string | null | undefined };
+    const state = { policy: DEFAULT_DELEGATE_POLICY as DelegatePolicy, stoodDown: false, depthCapped: false, delegatePrompt: undefined as string | null | undefined };
     let standDownWarned = false;
     let fleetCommandRegistered = false;
 
@@ -188,7 +189,8 @@ export function wirePiSubagents(pi: ExtensionAPI, agent: string): void {
             // package logs this via logThrow; bili's lane has no such channel).
             logHostEvent("error", "[native-client]", `bili-plugin(pi): subagents user config unreadable, using defaults: ${err instanceof Error ? err.message : String(err)}`);
         }
-        if (state.policy.enabled && !state.stoodDown) {
+        state.depthCapped = !delegationAllowedAtDepth(state.policy.maxDepth);
+        if (state.policy.enabled && !state.stoodDown && !state.depthCapped) {
             // The package's ToolDefinition carries typed params + its own
             // update-callback shape; bili's registration surface is the
             // minimal structural one. Compatible at runtime (pi duck-types
@@ -214,7 +216,7 @@ export function wirePiSubagents(pi: ExtensionAPI, agent: string): void {
     });
 
     pi.on("before_agent_start", (rawEvent) => {
-        if (!state.policy.enabled || state.stoodDown) return;
+        if (!state.policy.enabled || state.stoodDown || state.depthCapped) return;
         const text = state.delegatePrompt !== undefined ? state.delegatePrompt : ACP_DELEGATE_PROMPT;
         if (typeof text !== "string") return;
         return addPromptSection(rawEvent, DELEGATE_PROMPT_SECTION, text);

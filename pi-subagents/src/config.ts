@@ -43,9 +43,9 @@ export interface DelegateConfig {
    *  "merged" — delegate token usage folded into the tool-result usage field,
    *  counted as part of the main session totals. */
   displayUsage?: "merged" | "separate";
-  /** Maximum acp_delegate nesting depth. Default: 2 (main → child → grandchild;
-   *  the grandchild cannot delegate further). Set 1 to forbid nested delegation
-   *  (orchestrator → leaf workers only). The resolved value is propagated to
+  /** Maximum acp_delegate nesting depth. Default: 1 (main → child; children
+   *  register no delegate tools). Set 2 to let a child delegate once more
+   *  (main → child → grandchild). The resolved value is propagated to
    *  child processes via PI_ACP_DELEGATE_MAX_DEPTH so the cap follows the whole
    *  delegation tree, even when a child loads a different project acp.json. */
   maxDepth?: number;
@@ -122,7 +122,7 @@ export const DEFAULT_DELEGATE_POLICY: DelegatePolicy = {
   enabled: true,
   forceEnable: false,
   displayUsage: "separate",
-  maxDepth: 2,
+  maxDepth: 1,
   syncTimeoutMs: 5 * 60_000,
   idleMs: 5 * 60_000,
   asyncTimeoutMs: 30 * 60_000,
