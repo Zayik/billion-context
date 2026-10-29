@@ -163,7 +163,7 @@ calls per task, and how far the score moved between reps.
 Merges first, then folds, then as-tool changes. With no traffic data, the order runs from
 lowest risk up.
 
-- [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); decision pending
+- [x] 1. merge `researcher` + `planner` + `oracle` into one read-only role · variant: v1 · compared with: baseline · result: holds (10/11 both sides); kept
 - [ ] 2. fold `worker` (remove the role; the main agent edits itself) · variant: · compared with: · result:
 - [ ] 3. `reviewer` as-tool: structured result in place of the file path + 500-char preview (`delegate-tool.ts:37,2295`) · variant: · compared with: · result:
 - [ ] 4. merged investigator as-tool: structured result · variant: · compared with: · result:
@@ -189,7 +189,23 @@ Tokens used next to the estimate: zero for both (scripted model). The figures me
 
 - **Tasks that changed score:** none. t07 fails on both sides (known gap: bash write by a read-only role).
 - **Tasks that changed route but not score:** t03-plan and t04-ask now run `researcher`, as intended. The researcher child costs ~6,560 input tokens per call, against ~6,520 for planner and ~6,490 for oracle: +45 tokens from the longer merged prompt. No task the change shouldn't touch moved route.
-- **Latency +45%:** concentrated in t06, t07 and t08 (one t08 rep took 13.9 s). These are reviewer and unknown-role tasks the merge doesn't touch, and their tokens and model calls are identical to the baseline. The changed tasks t02–t04 kept 2.9–3.3 s. Inferred cause: slower pi process startup on this machine during the v1 run (the same cause as the t05 harness error below). Not rerun.
+- **Latency +45%:** concentrated in t06, t07 and t08 (one t08 rep took 13.9 s). These are reviewer and unknown-role tasks the merge doesn't touch, and their tokens and model calls are identical to the baseline. The changed tasks t02–t04 kept 2.9–3.3 s. Inferred cause: slower pi process startup on this machine during the v1 run (the same cause as the t05 harness error below).
+- **Reruns (latency, 2026-10-28):**
+  - Variants `baseline-rerun-v1` (commit b08fbf36, in a `git worktree` at `../bc-baseline-b08fbf36`, since removed) and `v1-rerun` (commit 779392c1, whose code is identical to c2d3d234).
+  - Tasks t01, t06, t07, t08, t09 × 4 reps, interleaved old/new per task and rep so machine slowness hits both sides.
+  - Rerun pair: latency 2.7 s → 2.7 s (−2%). Completion 4/5 on both (t07), tokens and calls unchanged.
+  - Over all reps (6 per side), the per-task median latency in seconds:
+
+    | Task | old | new |
+    | --- | ---: | ---: |
+    | t01 | 3.0 | 3.0 |
+    | t06 | 3.0 | 3.3 |
+    | t07 | 2.9 | 3.3 |
+    | t08 | 2.1 | 2.2 |
+    | t09 | 2.1 | 2.5 |
+
+    Every outlier (13.9, 6.8, 5.3, 5.0 s) is from the first v1 run.
+  - Conclusion: the +45% was machine noise, not the merge. This rests on 6 reps per task per side.
 - **Edited in the main agent's prompt and tool list:**
   - `acp_delegate` description: the role list is 3 lines, not 5, and the researcher blurb now reads "read-only investigation: explore code, propose a step-by-step plan, or answer a question".
   - promptGuidelines: "(reviewer/researcher/oracle)" became "(reviewer/researcher)", and the routing line became "explore code, plan multi-step work, or ask questions → researcher".
@@ -205,7 +221,7 @@ Tokens used next to the estimate: zero for both (scripted model). The figures me
 - **Skipped or not measured:** wrong pick, shortcut and repeated work (no live model). Whether a real model routes "plan" and "question" asks to `researcher` as well as it routed them to planner and oracle is untested.
 - **Old code:** the removed role entries live only in git; revert is `git revert c2d3d234`.
 - **Compat:** `delegate.agents.planner` / `delegate.agents.oracle` config now silently stops applying, and calls naming those roles get "Unknown agent". This is open owner question 1, unresolved; no aliases were added.
-- **Decision (who, when):** pending.
+- **Decision (who, when):** keep: the person, 2026-10-28 ("follow the two recommendations": keep and go on to item 2, after a free latency rerun on both sides).
 - **Left open after the decision:** issue + PR not opened yet (AGENTS.md requires both). Owner question 1.
 
 ## Open questions for owners
