@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, delegationAllowedAtDepth, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot } from "../src/delegate-tool.js";
-import { DEFAULT_DELEGATE_POLICY } from "../src/config.js";
+import { DEFAULT_DELEGATE_POLICY, resolveDelegate } from "../src/config.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /** Minimal ctx mock - buildChildArgs reads ctx.model and sessionManager. */
@@ -1143,6 +1143,21 @@ test("asyncWatchdogDescription honors a per-run hard-limit override", () => {
   }
 });
 // ─── ConcurrencyGate: bounded / serial background delegation (#294) ────────
+
+test("maxConcurrent: defaults to 3, honors an explicit value, and an invalid one falls back to the default", () => {
+  const prev = process.env.PI_ACP_DELEGATE_MAX_CONCURRENT;
+  try {
+    delete process.env.PI_ACP_DELEGATE_MAX_CONCURRENT;
+    assert.equal(resolveDelegate({}).maxConcurrent, 3, "default caps fan-out at 3");
+    assert.equal(resolveDelegate({ delegate: { maxConcurrent: 8 } }).maxConcurrent, 8, "explicit value wins");
+    assert.equal(resolveDelegate({ delegate: { maxConcurrent: 0 } }).maxConcurrent, 3, "invalid value falls back to the default, not unlimited");
+    process.env.PI_ACP_DELEGATE_MAX_CONCURRENT = "1";
+    assert.equal(resolveDelegate({ delegate: { maxConcurrent: 8 } }).maxConcurrent, 1, "env beats file");
+  } finally {
+    if (prev === undefined) delete process.env.PI_ACP_DELEGATE_MAX_CONCURRENT;
+    else process.env.PI_ACP_DELEGATE_MAX_CONCURRENT = prev;
+  }
+});
 
 test("ConcurrencyGate: unlimited capacity starts every launch immediately", () => {
   const gate = new ConcurrencyGate(() => Infinity);

@@ -62,11 +62,11 @@ export interface DelegateConfig {
    *  disables the limit. */
   asyncTimeoutMinutes?: number | null;
   /** Cap on how many background (async) delegate processes run at once.
-   *  `1` forces strict serial execution; `N` allows up to N in parallel;
-   *  omitted means unlimited (existing behavior). Extra launches are queued and
-   *  start automatically as slots free. Invalid values (non-integer, <1) fall
-   *  back to unlimited with a warning. Env `PI_ACP_DELEGATE_MAX_CONCURRENT`
-   *  overrides this. See #294. */
+   *  `1` forces strict serial execution; `N` allows up to N in parallel.
+   *  Default: 3 (two parallel review axes plus headroom). Extra launches are
+   *  queued and start automatically as slots free. Invalid values (non-integer,
+   *  <1) fall back to the default with a warning. Env
+   *  `PI_ACP_DELEGATE_MAX_CONCURRENT` overrides this. See #294. */
   maxConcurrent?: number;
   /** Global default thinking level applied to every delegate when neither the
    *  per-call `thinkingLevel` nor the role's own `thinkingLevel` is set. One of
@@ -105,7 +105,7 @@ export interface DelegatePolicy {
   syncTimeoutMs: number | null;
   idleMs: number | null;
   asyncTimeoutMs: number | null;
-  /** Resolved cap on concurrent background delegates; Infinity = unlimited. */
+  /** Resolved cap on concurrent background delegates. */
   maxConcurrent: number;
   /** Global default thinking level (undefined when unset). */
   thinkingLevel?: string;
@@ -126,7 +126,7 @@ export const DEFAULT_DELEGATE_POLICY: DelegatePolicy = {
   syncTimeoutMs: 5 * 60_000,
   idleMs: 5 * 60_000,
   asyncTimeoutMs: 30 * 60_000,
-  maxConcurrent: Infinity,
+  maxConcurrent: 3,
   notifyIfRead: "skip",
   fleetShortcut: DEFAULT_FLEET_SHORTCUT,
 };
@@ -230,7 +230,7 @@ function resolveTimeoutMinutes(value: number | string | null | undefined, field:
 }
 
 function resolveMaxConcurrent(envValue: string | undefined, cfgValue: number | undefined): number {
-  // Two-source resolution (env > acp.json > unlimited). Unlike the timeout/depth
+  // Two-source resolution (env > acp.json > default). Unlike the timeout/depth
   // fields (env ?? cfg), an INVALID env value falls through to acp.json rather
   // than to the default — preserving #294's original setDelegateMaxConcurrent
   // semantics. Invalid values warn and never fail the session.
@@ -242,7 +242,7 @@ function resolveMaxConcurrent(envValue: string | undefined, cfgValue: number | u
     if (raw === undefined || raw === "") continue;
     const n = typeof raw === "number" ? raw : Number(raw);
     if (Number.isInteger(n) && n >= 1) return n;
-    logWarn("config", { event: "delegate-config-invalid", field: "maxConcurrent", source: name, value: String(raw), fallback: "unlimited" });
+    logWarn("config", { event: "delegate-config-invalid", field: "maxConcurrent", source: name, value: String(raw), fallback: DEFAULT_DELEGATE_POLICY.maxConcurrent });
   }
   return DEFAULT_DELEGATE_POLICY.maxConcurrent;
 }
