@@ -147,10 +147,17 @@ function formatBytes(n: number): string {
 
 // --- Generic tool-call repetition guard (ported from bcp #308) ---
 // A greedy small model can re-emit the same (assistant -> toolResult) pair every
-// turn; token penalties can't break that attractor, so we key on byte-for-byte
-// identity of consecutive calls. At `warn` append a strong warning to the
-// matching toolResult; at `abort` refuse the call (block) and abort the turn.
-// Any arg/tool change resets the run.
+// turn; token penalties can't break that attractor, so we key on canonical
+// identity of consecutive calls (arguments compared key-order-insensitively via
+// canonicalStringify). At `warn` append a strong warning to the matching
+// toolResult; at `abort` refuse the call (block) and abort the turn. Any
+// arg/tool change resets the run, and so does a previous identical call that
+// actually EXECUTED for >= REPEAT_SLOW_CALL_MS (#5225): wall-clock work between
+// repeats means long-polling external state (e.g. an MCP wait tool), not a
+// rapid degenerate loop — escalation only continues while the run stays rapid.
+// Without duration evidence (missing/out-of-order results) the count-only
+// behavior stands, which is the fail-safe direction.
+const REPEAT_SLOW_CALL_MS = 5000;
 export function canonicalStringify(value: unknown): string {
     if (value === null || value === undefined || typeof value !== "object") {
         try {
@@ -188,31 +195,52 @@ interface RepetitionDecision {
 export class RepetitionTracker {
     private lastFp: string | null = null;
     private count = 0;
+    private lastCompleted: { fp: string; durationMs: number } | null = null;
+    private pendingStarts = new Map<string, { fp: string; startedAt: number }>();
     constructor(private readonly thresholds: { warn: number; abort: number }) {}
-    note(toolName: string, input: unknown): RepetitionDecision {
+    note(toolName: string, input: unknown, toolCallId?: string, now: number = Date.now()): RepetitionDecision {
         const fp = repetitionFingerprint(toolName, input);
+        const done = this.lastCompleted;
+        if (done && done.fp === fp && done.durationMs >= REPEAT_SLOW_CALL_MS) {
+            // prior identical call did real wall-clock work -> long-poll, restart the run
+            this.lastFp = null;
+            this.count = 0;
+        }
         if (fp === this.lastFp) this.count += 1;
         else {
             this.lastFp = fp;
             this.count = 1;
         }
+        if (toolCallId !== undefined) this.pendingStarts.set(toolCallId, { fp, startedAt: now });
         let action: RepetitionAction = "none";
         if (this.count >= this.thresholds.abort) action = "abort";
         else if (this.count >= this.thresholds.warn) action = "warn";
         return { action, count: this.count, fingerprint: fp, toolName };
     }
+    /** Feed a tool_result back in so the next note() knows how long the call took.
+     *  Unknown/missing ids are ignored — without duration evidence the count-only
+     *  behavior stands (#5225 fail-safe). */
+    complete(toolCallId: string | undefined, now: number = Date.now()): void {
+        if (toolCallId === undefined) return;
+        const p = this.pendingStarts.get(toolCallId);
+        if (!p) return;
+        this.pendingStarts.delete(toolCallId);
+        this.lastCompleted = { fp: p.fp, durationMs: Math.max(0, now - p.startedAt) };
+    }
     reset(): void {
         this.lastFp = null;
         this.count = 0;
+        this.lastCompleted = null;
+        this.pendingStarts.clear();
     }
 }
 
 function buildRepetitionWarnNotice(toolName: string, count: number): string {
-    return `\n\n[ACP guardrail: you have issued ${count} CONSECUTIVE identical \`${toolName}\` calls (name + arguments byte-for-byte identical). Re-running the exact same call will not produce a new result. STOP issuing this identical call — change your approach, change the arguments, or stop and report to the user.]`;
+    return `\n\n[ACP guardrail: you have issued ${count} CONSECUTIVE identical \`${toolName}\` calls in quick succession (same tool, equivalent arguments — key order aside). If nothing changed since the last result, re-issuing this exact call will not help. STOP repeating it: verify what changed since the last result, take a different step, or stop and report to the user.]`;
 }
 
 function buildRepetitionAbortNotice(toolName: string, count: number): string {
-    return `[ACP guardrail: BLOCKED — you issued ${count} consecutive identical \`${toolName}\` calls (byte-for-byte identical arguments). This call was refused and NOT executed. You MUST change strategy: use different arguments, a different tool, or stop and report to the user. Do not re-issue the identical call. The turn has been aborted.`;
+    return `[ACP guardrail: BLOCKED — you issued ${count} consecutive identical \`${toolName}\` calls in quick succession (equivalent arguments, key order aside). This call was refused and NOT executed. You MUST change strategy: take a different step, use a different tool, or stop and report to the user. Do not re-issue the identical call. The turn has been aborted.`;
 }
 
 export interface GuardrailOptions {
@@ -258,7 +286,7 @@ export function wireToolGuardrails(pi: ExtensionAPI, opts: GuardrailOptions = {}
             tracker = new RepetitionTracker(repCfg);
             trackers.set(sid, tracker);
         }
-        const decision = tracker.note(e.toolName, e.input);
+        const decision = tracker.note(e.toolName, e.input, e.toolCallId);
         if (decision.action === "abort") {
             const msg = buildRepetitionAbortNotice(decision.toolName, decision.count);
             if (ctx?.ui?.notify) ctx?.ui?.notify(`[ACP] ${msg}`, "warning");
@@ -274,8 +302,10 @@ export function wireToolGuardrails(pi: ExtensionAPI, opts: GuardrailOptions = {}
         }
     });
 
-    pi.on("tool_result", (event) => {
+    pi.on("tool_result", (event, rawCtx) => {
         const e = event as unknown as ToolResultEventLike;
+        const ctx = rawCtx as unknown as GuardrailCtx;
+        trackers.get(ctx?.sessionManager?.getSessionId?.() ?? "")?.complete(e.toolCallId);
         const isBash = isBashToolResult(e);
         const fullPath = isBash ? e.details?.fullOutputPath : undefined;
         const timeoutSecs = isBash && e.isError ? detectBashTimeout(e.content) : undefined;
