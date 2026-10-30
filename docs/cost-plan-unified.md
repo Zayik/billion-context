@@ -15,7 +15,9 @@ Lower the dollar cost of long Pi sessions on GPT-6.1 Terra and Claude Opus 5.5 b
 From the recorded 689-request Terra session on Copilot (`01a18a04`) and the Opus/Terra planning session (`01a18bc6`).
 
 - **Cache collapse** [measured]: after 20 of 21 folds, the next request read exactly 9,046 cached tokens, the developer-block boundary. After fold 1 it read 9,252.
-  - Cause, **hypothesis** [Δ both: no request bodies were recorded, so the cause is supported, not proven]: GPT-5.6+ implicit caching looks up only the implicit breakpoint, up to 20 earlier eligible message endings and the developer-block end. Anthropic looks back 20 blocks per marker. Probe A settles it.
+  - Cause, **confirmed by probes A and C on 2026-10-30** ([results](research/cache-probe-results-2026-10-30.md), $0.57): GPT-5.6+ implicit caching looks up only the implicit breakpoint, up to 20 earlier eligible message endings and the developer-block end. Anthropic looks back 20 blocks per marker.
+    - A synthetic edit beyond the window collapsed the cache to the developer block on Copilot Terra and to the system prompt on Copilot Opus.
+    - An explicit marker before the edit preserved the prefix on both: Copilot accepts and honours `prompt_cache_breakpoint` and arbitrary `cache_control` positions, enforces the 4-marker limit, and accepts `ttl:"1h"` (price unverified).
 - **Measured spend:** $8.27, priced from per-request usage records, not an invoice [Δ Terra]. Breakdown: reads $3.25 (65.05M), writes $3.54 (2.83M), output $1.47.
   - Fold-caused writes cost $1.81 gross. The premium over reading the same tokens is ≈ $1.70–1.74 [Δ both: gross is not the premium].
 - **Model calibration:** $8.06 after removing summary output that the scripts count twice, against $8.27 measured (−2.5%) [Δ Terra: the old "$8.18, within ~1%" double-counted ≈ $0.12]. The double count is about the same in every bili scenario below, so *relative* comparisons hold. The calibration replays measured request sizes, so it checks pricing and TTL handling, not counterfactual dynamics [Δ Opus].
@@ -146,7 +148,7 @@ Exit:
 - a live Terra A/B on real work shows lower dollars per session;
 - no rise in overflow errors or signed-thinking errors.
 
-### P3 — OpenAI Responses markers (only if probe A or B is positive)
+### P3 — OpenAI Responses markers (go for Copilot Terra: probe A positive)
 
 1. Explicit breakpoints at the frontier, after each tool result, and at summary and uncovered-run boundaries. Implicit caching stays on. At most 3 new writes per request. 30-minute lifetime.
 2. Detect rejection and drop the field automatically (#2645 pattern), per route.
@@ -208,9 +210,11 @@ Exit: in a scripted session, a pause past the cache lifetime resumes with a smal
   - keepalive: per-model settings, starting at 30 min, tuned from savings statistics;
   - summarizer: Haiku 5.5 or Luna by availability; cross-vendor approved.
 - Keepalive statistics: once enough pauses are logged, decide per-model caps and whether to propose a return-probability stop rule (a new config field, so it needs a config-surface section).
-- Copilot support for `prompt_cache_breakpoint`, arbitrary `cache_control` placement and 1h TTL (probes A–C).
-- Whether reading a longer prefix keeps shorter checkpoint entries alive (probe C.4).
-- Terra cache lifetime beyond 30 min (probe D).
+- ~~Copilot support for `prompt_cache_breakpoint` and arbitrary `cache_control` placement~~: answered yes (probes A, C).
+- Copilot's price for 1h writes: accepted, but the price is unverified. Check the Copilot usage report before TTL tiering.
+- openai-codex marker support (probe B, not yet built; low priority).
+- Whether reading a longer prefix keeps shorter checkpoint entries alive (probe C.4, about $0.25, timed).
+- Terra cache lifetime beyond 30 min (probe D, re-read pending).
 - Kernel changes, discussed case by case: trigger logic inside the kernel; marker-aware fold selection.
 - Summarizer quality on large batches; latency of large batches (#2670 field data: ~15 s per range, 180 s timeouts).
 - Payback horizon, tier margin, threshold and raw-tail values: tune by replay, not fixed up front.

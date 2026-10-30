@@ -28,7 +28,6 @@ const PROBE = flag("--probe", "all");
 const CAP = Number(flag("--cap", "1.00"));
 const AUTH = flag("--auth", process.env.PI_AUTH_FILE ?? path.join("D:/Development/Pi/agent", "auth.json"));
 const OUT = flag("--out", process.env.CACHE_PROBE_OUT ?? path.join(os.homedir(), ".cache", "billion-context", "cache-probes"));
-const BASE = "https://api.individual.githubcopilot.com";
 
 const PRICES = {
     terra: { in: 1, read: 0.05, write: 1.25, write1h: 1.25, out: 5 },
@@ -68,6 +67,13 @@ function loadToken() {
     const minutes = (auth.expires - Date.now()) / 60000;
     if (minutes < 5) throw new Error("Copilot token expires within 5 minutes; start Pi once to refresh it, then re-run");
     return auth.access;
+}
+
+// The Copilot token names its own proxy host (individual, business or enterprise);
+// the API host is the same name with "api." instead of "proxy.".
+function copilotBase() {
+    const ep = /(?:^|;)proxy-ep=([^;]+)/.exec(loadToken())?.[1] ?? "proxy.individual.githubcopilot.com";
+    return `https://${ep.replace(/^proxy\./, "api.")}`;
 }
 
 const COPILOT_HEADERS = {
@@ -162,7 +168,7 @@ function terraInput(seed, { editTurn = -1, breakpointTurn = -1, extraRounds = 0 
 }
 
 const terraBody = (input) => ({ model: "gpt-6.1-terra", input, max_output_tokens: 16, reasoning: { effort: "none" }, store: false, stream: false });
-const terraSend = (name, input) => send(name, "terra", `${BASE}/responses`, terraBody(input));
+const terraSend = (name, input) => send(name, "terra", `${copilotBase()}/responses`, terraBody(input));
 
 async function probeA() {
     const s1 = 4101 + (Date.now() % 997);
@@ -218,7 +224,7 @@ function opusBody(seed, { markers = [], editTurn = -1, extraRounds = 0, ttl = {}
     return { model: "claude-opus-5.5", max_tokens: 16, system, messages };
 }
 
-const opusSend = (name, body) => send(name, "opus", `${BASE}/v1/messages`, body, { "anthropic-version": "2023-06-01" });
+const opusSend = (name, body) => send(name, "opus", `${copilotBase()}/v1/messages`, body, { "anthropic-version": "2023-06-01" });
 
 async function probeC() {
     const c1 = 7301 + (Date.now() % 997);
