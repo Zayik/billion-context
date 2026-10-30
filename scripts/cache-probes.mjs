@@ -194,9 +194,15 @@ async function probeDStart() {
 
 async function probeDFinish() {
     if (!fs.existsSync(D_STATE)) throw new Error(`no ${D_STATE}; run --probe D-start first`);
-    const { seed, at } = JSON.parse(fs.readFileSync(D_STATE, "utf8"));
-    const minutes = ((Date.now() - at) / 60000).toFixed(1);
-    await terraSend(`D-finish after ${minutes} min: warm if cached ~= base`, terraInput(seed, { extraRounds: 1 }));
+    const state = JSON.parse(fs.readFileSync(D_STATE, "utf8"));
+    // A read refreshes the entry, so the idle gap is measured from the last touch.
+    const lastTouch = state.lastTouch ?? state.at;
+    const minutes = ((Date.now() - lastTouch) / 60000).toFixed(1);
+    if (Number(minutes) < 45 && !args.includes("--force")) {
+        throw new Error(`only ${minutes} min since the last touch; wait until ${new Date(lastTouch + 45 * 60000).toISOString()} (or pass --force)`);
+    }
+    const r = await terraSend(`D-finish ${minutes} min after last touch: warm if cached ~= base`, terraInput(state.seed, { extraRounds: 1 }));
+    if (r?.ok) fs.writeFileSync(D_STATE, JSON.stringify({ ...state, lastTouch: Date.now() }));
 }
 
 // ---- Probe C: Copilot Opus, Messages API ----

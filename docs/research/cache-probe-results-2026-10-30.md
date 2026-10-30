@@ -42,7 +42,9 @@ What this shows:
 
 ## Still open
 
-- **D-finish:** whether the Terra cache outlives 30 minutes. D-start wrote a prefix at 21:03 UTC; D-finish re-reads it about 46 minutes later.
+- **D-finish:** whether the Terra cache outlives 30 minutes.
+  - A first re-read at 21.1 min was warm (22,655 of 22,680 cached, $0.0012). That only confirms the documented 30-minute minimum.
+  - That read also refreshed the entry, so the 45-minute test restarts from 21:24 UTC. Run D-finish after 22:09 UTC; the script now measures from the last touch and refuses earlier runs.
 - **B:** openai-codex. Not implemented; that route is rarely used.
 - **C.4:** whether a shorter marker's entry stays alive while only longer prefixes are read. Needs a timed run of about 7 minutes and costs roughly $0.25.
 
