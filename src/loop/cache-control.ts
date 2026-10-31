@@ -137,8 +137,12 @@ export function foldAnchorMessageIds(
     for (const message of originalMessages) {
         const id = message.id;
         if (typeof id !== "string" || id.length === 0) continue;
-        for (const index of blocksByBase.get(baseIdOf(id)) ?? []) {
-            if (!anchorOf.has(index)) anchorOf.set(index, last);
+        // A covered message the view still renders (the kernel can keep one,
+        // such as the first user message) is not where the range starts.
+        if (!visible.has(id)) {
+            for (const index of blocksByBase.get(baseIdOf(id)) ?? []) {
+                if (!anchorOf.has(index)) anchorOf.set(index, last);
+            }
         }
         if (visible.has(id) && accept(message)) last = id;
     }

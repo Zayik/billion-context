@@ -57,6 +57,12 @@ test("fold anchor: a range at the very start has no anchor", () => {
     assert.equal(foldAnchorMessageId(original, msgs("u2"), [block(1, ["u1", "a1"])]), undefined);
 });
 
+test("fold anchor: a covered message the view still renders is not the range start", () => {
+    // The kernel kept u1 visible although the fold covered it: anchor on u1.
+    const original = msgs("u1", "a1", "u2", "a2", "u3");
+    assert.equal(foldAnchorMessageId(original, msgs("u1", "a2", "u3"), [block(1, ["u1", "a1", "u2"])]), "u1");
+});
+
 test("fold anchors: one per active fold, newest first, deduplicated and capped", () => {
     const original = msgs("u1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5");
     // Three folds: a1 (oldest), u3..a3 (newest), u4 (middle, after the newest in position).
