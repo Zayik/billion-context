@@ -7,6 +7,7 @@ import { resolveAbsorbSettings } from "../compress-settings.js";
 import { effectivePromptCacheRouting, resolveCompressProtocol, type CompressSettings, type ProxyOptions } from "../config.js";
 import { currentCalibrationFactor, strippedResponseIdWarning } from "../util.js";
 import { applyReasoningDrop, diagNudge, diagTagSummary, deriveTitle, effectiveTokenCount, imageBillingFor, imageReserveFor, imageTokenCapFor, isAutoInjectedNotification, planReasoningDrop, repairResponsesAssistantOrdering, reapOrphansLogged, resolveKnownOutputCeiling, runNudgeDecision, stripKernelSummaries, usageGradeInputBaseline, warnResponsesReasoningPairs, type Prepared } from "../server.js";
+import { foldAnchorMessageId, isCopilotOrigin, withResponsesFoldAnchor } from "../loop/cache-control.js";
 import { yieldToEventLoop } from "../yield-loop.js";
 import { buildDecisionPrompt, buildDirectiveText, consumeFallback, ladderMode, resolveDecisionRange, stripDecisionReasoningFields, type DecideConfig } from "../nudge-decide.js";
 import { excludeDeadRefRanges } from "../acp-status.js";
@@ -414,6 +415,12 @@ reconcileFoldCoverage(session, msgs, { mode: foldMode, sessionId, log, markerStr
         }
         reapOrphansLogged(session, msgs, log, sessionId);
         rebuiltInput = patchResponsesInput(projection, processedMessages);
+        // Fold anchor (Copilot only): one explicit breakpoint on the last user
+        // item before the newest folded range, so the next fold re-reads the
+        // prefix up to there instead of falling back to the developer block.
+        if (Array.isArray(rebuiltInput) && isCopilotOrigin(upstreamOrigin)) {
+            rebuiltInput = withResponsesFoldAnchor(rebuiltInput, projection.layout, foldAnchorMessageId(originalMessages, processedMessages, turn.state.blocks, (m) => m.role === "user"));
+        }
         if (Array.isArray(rebuiltInput)) rebuiltInput = mergeAdjacentConfigurationUpdates(hoistTrappedToolItems(rebuiltInput));
         // #3400: the Responses steady path rebuilds items from the RAW parsed
         // input (patchOriginalItem), so BiliMessage-level modifications never
