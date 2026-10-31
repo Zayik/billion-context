@@ -16,6 +16,8 @@
 // survived; ~ the system/developer block means it expired.
 // terra: 30-minute minimum lifetime, interval 4 min, final edit at ~36 min.
 // opus:  5-minute lifetime (Copilot), interval 2 min, final edit at ~7.5 min.
+// Project rule: tests use the cheap models only (GPT-6 Luna, Haiku 5.5); the
+// probe names terra/opus refer to the route family, not the model billed.
 // Credentials come from Pi's auth.json (github-copilot entry) and are never printed.
 
 import fs from "node:fs";
@@ -173,7 +175,7 @@ function terraInput(seed, { mark5 = true, editTurn = -1, rounds = 0 } = {}) {
     return items;
 }
 const terraSend = (name, seed, opts) => send(`${at()} ${name}`, "terra", RUN ? `${copilotBase()}/responses` : "dry-run",
-    { model: "gpt-6.1-terra", input: terraInput(seed, opts), max_output_tokens: 16, reasoning: { effort: "none" }, store: false, stream: false, prompt_cache_key: `ttl-probe-${seed}` });
+    { model: flag("--terra-model", "gpt-6-luna"), input: terraInput(seed, opts), max_output_tokens: 16, reasoning: { effort: "none" }, store: false, stream: false, prompt_cache_key: `ttl-probe-${seed}` });
 
 // ---- Opus (Messages) ----
 const O_TURNS = 26, O_TOK = 300;
@@ -193,7 +195,7 @@ function opusBody(seed, { mark5 = true, editTurn = -1, rounds = 0 } = {}) {
         messages.push({ role: "user", content: [{ type: "text", text: `Round ${k + 2}. Reply with the single word OK.` }] });
     }
     messages[messages.length - 1].content[0].cache_control = cc;
-    return { model: "claude-opus-5.5", max_tokens: 16, system, messages };
+    return { model: flag("--opus-model", "claude-haiku-5.5"), max_tokens: 16, system, messages };
 }
 const opusSend = (name, seed, opts) => send(`${at()} ${name}`, "opus", RUN ? `${copilotBase()}/v1/messages` : "dry-run", opusBody(seed, opts), { "anthropic-version": "2023-06-01" });
 
