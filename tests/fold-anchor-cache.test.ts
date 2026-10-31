@@ -154,6 +154,17 @@ test("responses fold anchor: string content becomes one input_text part", () => 
     assert.deepEqual(out[0], { role: "user", content: [{ type: "input_text", text: "hello", prompt_cache_breakpoint: { mode: "explicit" } }] });
 });
 
+test("responses fold anchor: a tool result takes the breakpoint on its output", () => {
+    const bp = { mode: "explicit" };
+    const str = { type: "function_call_output", call_id: "c1", output: "summary text" };
+    const arr = { type: "function_call_output", call_id: "c2", output: [{ type: "input_text", text: "one" }, { type: "input_image", image_url: "x" }] };
+    const layout = [{ original: str, coreId: "t1" }, { original: arr, coreId: "t2" }];
+    const out = withResponsesFoldAnchor([str, arr], layout, ["t1", "t2"]);
+    assert.deepEqual(out[0], { type: "function_call_output", call_id: "c1", output: [{ type: "input_text", text: "summary text", prompt_cache_breakpoint: bp }] });
+    assert.deepEqual(out[1], { type: "function_call_output", call_id: "c2", output: [{ type: "input_text", text: "one", prompt_cache_breakpoint: bp }, { type: "input_image", image_url: "x" }] });
+    assert.equal(typeof str.output, "string", "client item never mutated");
+});
+
 test("responses fold anchor: unchanged when the anchor is missing, rebuilt, or not a user message", () => {
     const user = { type: "message", role: "user", content: "hi" };
     const dev = { type: "message", role: "developer", content: "d" };

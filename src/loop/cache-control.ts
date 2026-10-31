@@ -114,11 +114,11 @@ export function stampAnthropicSystemCacheControl(systemOut: AnthropicRequestBody
  * Stateless: derived from the active blocks every request.
  */
 export function foldAnchorMessageIds(
-    originalMessages: readonly { id?: string; role?: string }[],
+    originalMessages: readonly { id?: string; role?: string; contentType?: string }[],
     processed: readonly { id?: string }[],
     blocks: readonly { active: boolean; createdAt: number; effectiveMessageIds: readonly string[] }[],
     limit: number,
-    accept: (message: { id?: string; role?: string }) => boolean = () => true,
+    accept: (message: { id?: string; role?: string; contentType?: string }) => boolean = () => true,
 ): string[] {
     const active = blocks.filter((block) => block.active && block.effectiveMessageIds.length > 0);
     if (active.length === 0 || limit <= 0) return [];
@@ -236,11 +236,12 @@ export const RESPONSES_FOLD_ANCHOR_LIMIT = 40;
 
 /**
  * Responses counterpart of withAnthropicFoldAnchor: stamp the explicit
- * breakpoint on the last input_text part of each anchor's user item. The item
+ * breakpoint on the last input_text part of each anchor's user item or
+ * tool result. The item
  * is found by reference (patchResponsesInput re-emits an unchanged slot's
  * original object), and replaced by a copy so the client's parsed input is
  * never mutated. Returns the input unchanged when the anchor is not a plain
- * user message item or is not found.
+ * user message or tool result, or is not found.
  */
 export function withResponsesFoldAnchor<T>(
     items: T[],
@@ -263,13 +264,20 @@ function stampResponsesAnchor<T>(
     if (!slot) return items;
     const index = items.indexOf(slot.original as T);
     if (index < 0) return items;
-    const item = slot.original as { type?: string; role?: string; content?: unknown };
-    if ((item.type !== undefined && item.type !== "message") || item.role !== "user") return items;
+    const item = slot.original as { type?: string; role?: string; content?: unknown; output?: unknown };
+    // A tool result (function_call_output) takes the breakpoint on its output
+    // parts: Copilot GPT-6 Luna writes an entry there (probe, 2026-10-31).
+    // After folds the compress results cluster right after the developer
+    // block, so that is where most of the reusable prefix ends.
+    const isOutput = item.type === "function_call_output";
+    if (!isOutput && ((item.type !== undefined && item.type !== "message") || item.role !== "user")) return items;
+    const field = isOutput ? "output" : "content";
+    const value = item[field];
     let content: Record<string, unknown>[];
-    if (typeof item.content === "string") {
-        content = [{ type: "input_text", text: item.content }];
-    } else if (Array.isArray(item.content)) {
-        content = item.content as Record<string, unknown>[];
+    if (typeof value === "string") {
+        content = [{ type: "input_text", text: value }];
+    } else if (Array.isArray(value)) {
+        content = value as Record<string, unknown>[];
     } else {
         return items;
     }
@@ -282,6 +290,6 @@ function stampResponsesAnchor<T>(
     }
     if (last < 0 || content[last]!["prompt_cache_breakpoint"] !== undefined) return items;
     const out = [...items];
-    out[index] = { ...item, content: content.map((part, i) => (i === last ? { ...part, prompt_cache_breakpoint: RESPONSES_BREAKPOINT } : part)) } as T;
+    out[index] = { ...item, [field]: content.map((part, i) => (i === last ? { ...part, prompt_cache_breakpoint: RESPONSES_BREAKPOINT } : part)) } as T;
     return out;
 }
