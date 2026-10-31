@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import { networkInterfaces } from "node:os";
 import { Worker } from "node:worker_threads";
 import { log as loggerLog } from "./logger.js";
+import { recordResolverOutcome } from "./resolver-wedge.js";
 
 /**
  * Tunnel admission for the `/bili/<absolute-url>` zero-config branch (#409).
@@ -299,6 +300,10 @@ export async function checkTunnelDestination(origin: string, ctx: TunnelCheckCon
                 await new Promise<void>((r) => setTimeout(r, backoff));
             }
         }
+        // #5222 Phase 2: feed the wedge detector with the MAIN pool's verdict, before
+        // the worker stage — the probe mitigates admission but does not heal the pool
+        // (outbound connects still use it), so detection evidence stays main-pool-only.
+        recordResolverOutcome(host, resolved !== undefined);
         let workerStageRan = false;
         // #5222: the main pool gave up — one fresh-pool probe before denying. A
         // long-lived process can wedge its own resolver state permanently
