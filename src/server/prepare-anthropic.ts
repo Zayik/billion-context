@@ -28,7 +28,7 @@ import { detectGenerationBoundary } from "../generation-boundary.js";
 import { attachSubagentSessions } from "../subagent-sessions.js";
 import { estimateCoreMessages, estimateCoreMessagesUpper, extractBillingAttributionBlock } from "../preflight.js";
 import { dshNativeCompactionWitness, recordConflict } from "../conflict-watch.js";
-import { anthropicToolsCarryCacheControl, computeAnthropicMessageMarks, foldAnchorMessageId, stampAnthropicSystemCacheControl, withAnthropicFoldAnchor } from "../loop/cache-control.js";
+import { anthropicToolsCarryCacheControl, computeAnthropicMessageMarks, foldAnchorMessageId, foldAnchorPolicy, stampAnthropicSystemCacheControl, withAnthropicFoldAnchor } from "../loop/cache-control.js";
 import { reconcileSystemAnchor } from "../system-anchor.js";
 import { isStrictReasoningEcho, modelIdOf } from "../strict-echo.js";
 import { logRawStripCounts, markerArtifactCount, stripRawStage } from "../marker/engine.js";
@@ -474,9 +474,10 @@ export async function prepareAnthropic(
         // uses — `anthropicCacheMarks ?? cacheControls`. The client's harvested
         // map is the fallback the rebuild applies when bili adds no marks of its
         // own (a client-managed session), so its trigger-turn breakpoint survives.
-        // Fold anchor: one extra breakpoint before the newest folded range (used
-        // only when bili adds no marks of its own).
-        clientCacheControls = withAnthropicFoldAnchor(cacheControls, foldAnchorMessageId(originalMessages, processedMessages, turn.state.blocks), parsed.system, parsed.tools);
+        // Fold anchor (listed vendors only): one extra breakpoint before the
+        // newest folded range, used only when bili adds no marks of its own.
+        const anchorPolicy = foldAnchorPolicy("anthropic", upstreamOrigin);
+        clientCacheControls = anchorPolicy ? withAnthropicFoldAnchor(cacheControls, foldAnchorMessageId(originalMessages, processedMessages, turn.state.blocks, anchorPolicy.accept), parsed.system, parsed.tools) : cacheControls;
         // #3400: egress image rescale — outbound copies only; the originals
         // stay in session state/persistence untouched.
         const egressMessages = await applyImageRescalePass(processedMessages as BiliMessage[], { session, sessionId, log, maxDim: imageRescaleMaxDim(), toolArmed: imageRescaleToolArmed(session) });

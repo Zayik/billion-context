@@ -15,7 +15,7 @@ import { _resetPluginStateForTest } from "../src/plugin.ts";
 import { _setForTest as setRegistryForTest } from "../src/registry.ts";
 import { startServer } from "../src/server.ts";
 import { rmrf } from "./tmp-rm.ts";
-import { foldAnchorMessageId, foldAnchorMessageIds, isCopilotOrigin, withAnthropicFoldAnchor, withResponsesFoldAnchor } from "../src/loop/cache-control.ts";
+import { _setFoldAnchorHostsForTest, foldAnchorMessageId, foldAnchorMessageIds, foldAnchorPolicy, withAnthropicFoldAnchor, withResponsesFoldAnchor } from "../src/loop/cache-control.ts";
 
 // Fold anchor: after a fold, every provider cache entry sits after the folded
 // range, so the next request re-reads only the system head. One breakpoint
@@ -112,16 +112,6 @@ test("anthropic fold anchor: copies a uniform 1h TTL, skips mixed TTLs", () => {
     assert.equal(withAnthropicFoldAnchor(mixed, "a2", system, []), mixed);
 });
 
-test("anthropic fold anchor: BILI_NO_CACHE_CONTROL disables it", () => {
-    process.env.BILI_NO_CACHE_CONTROL = "1";
-    try {
-        const client = new Map<string, unknown>([["u9", { type: "ephemeral" }]]);
-        assert.equal(withAnthropicFoldAnchor(client, "a2", [], []), client);
-    } finally {
-        delete process.env.BILI_NO_CACHE_CONTROL;
-    }
-});
-
 test("responses fold anchor: explicit breakpoint on the last input_text of the anchor item, by copy", () => {
     const anchorItem = { type: "message", role: "user", content: [{ type: "input_text", text: "first" }, { type: "input_image", image_url: "x" }, { type: "input_text", text: "last" }] };
     const other = { type: "message", role: "user", content: "tail" };
@@ -163,13 +153,36 @@ test("responses fold anchor: unchanged when the anchor is missing, rebuilt, or n
     assert.equal(withResponsesFoldAnchor([{ ...user }, dev], layout, ["u1"])[0]!.content, "hi");
 });
 
-test("isCopilotOrigin: only githubcopilot.com hosts", () => {
-    assert.equal(isCopilotOrigin("https://api.githubcopilot.com"), true);
-    assert.equal(isCopilotOrigin("https://api.enterprise.githubcopilot.com/v1"), true);
-    assert.equal(isCopilotOrigin("https://api.openai.com"), false);
-    assert.equal(isCopilotOrigin("https://githubcopilot.com.evil.example"), false);
-    assert.equal(isCopilotOrigin(undefined), false);
-    assert.equal(isCopilotOrigin("not a url"), false);
+test("fold anchor policy: listed vendors only; BILI_NO_CACHE_CONTROL disables it", () => {
+    assert.equal(foldAnchorPolicy("responses", "https://api.githubcopilot.com")?.limit, 40);
+    assert.equal(foldAnchorPolicy("responses", "https://api.enterprise.githubcopilot.com/v1")?.limit, 40);
+    assert.equal(foldAnchorPolicy("responses", "https://api.openai.com"), undefined);
+    assert.equal(foldAnchorPolicy("responses", "https://chatgpt.com/backend-api/codex"), undefined);
+    assert.equal(foldAnchorPolicy("responses", "https://githubcopilot.com.evil.example"), undefined);
+    assert.equal(foldAnchorPolicy("anthropic", "https://api.anthropic.com")?.limit, 1);
+    assert.equal(foldAnchorPolicy("anthropic", "https://api.githubcopilot.com")?.limit, 1);
+    assert.equal(foldAnchorPolicy("anthropic", "https://openrouter.ai/api"), undefined);
+    assert.equal(foldAnchorPolicy("anthropic", undefined), undefined);
+    assert.equal(foldAnchorPolicy("anthropic", "not a url"), undefined);
+    process.env.BILI_NO_CACHE_CONTROL = "1";
+    try {
+        assert.equal(foldAnchorPolicy("anthropic", "https://api.anthropic.com"), undefined);
+    } finally {
+        delete process.env.BILI_NO_CACHE_CONTROL;
+    }
+});
+
+test("fold anchor policy: Anthropic anchors step back past messages the encoder cannot mark", () => {
+    const { accept } = foldAnchorPolicy("anthropic", "https://api.anthropic.com")!;
+    const original = [
+        { id: "u1", role: "user", contentType: "text" },
+        { id: "r1", role: "assistant", contentType: "reasoning" },
+        { id: "x1", role: "assistant", contentType: "text", rawAnthropicBlock: {} },
+        { id: "a1", role: "assistant", contentType: "text" },
+    ];
+    const processed = [{ id: "u1" }, { id: "r1" }, { id: "x1" }];
+    assert.equal(foldAnchorMessageId(original, processed, [block(1, ["a1"])], accept), "u1");
+    assert.equal(foldAnchorMessageId(original, processed, [block(1, ["a1"])]), "x1", "without the filter it would land on an unmarkable block");
 });
 
 // End to end, Anthropic wire, pi plugin mode with client-managed marks
@@ -237,6 +250,7 @@ test("anthropic fold anchor e2e: a plugin fold adds one breakpoint before the fo
     _setStoreForTest(new SessionStore({ enabled: false }));
     setRegistryForTest({});
     _resetPluginStateForTest();
+    _setFoldAnchorHostsForTest(["127.0.0.1"]);
     const proxy = await startServer({
         port: 0, host: "127.0.0.1", upstream: "http://127.0.0.1",
         routes: { [`http://127.0.0.1:${upstreamPort}`]: { models: { "claude-test": { context: 400_000 } } } },
@@ -291,5 +305,6 @@ test("anthropic fold anchor e2e: a plugin fold adds one breakpoint before the fo
         if (prevXdg === undefined) delete process.env.XDG_STATE_HOME;
         else process.env.XDG_STATE_HOME = prevXdg;
         rmrf(stateDir);
+        _setFoldAnchorHostsForTest([]);
     }
 });

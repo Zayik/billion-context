@@ -92,6 +92,8 @@ export function stampAnthropicSystemCacheControl(systemOut: AnthropicRequestBody
     return systemOut;
 }
 
+type AnchorMessage = { id?: string; role?: string; contentType?: string; rawAnthropicBlock?: unknown; rawAnthropicMessage?: unknown };
+
 /**
  * Fold anchors: after a fold, every cache entry the client's own breakpoints
  * wrote sits after the folded range, so the next request re-reads only the
@@ -103,11 +105,11 @@ export function stampAnthropicSystemCacheControl(systemOut: AnthropicRequestBody
  * breakpoints) and the newest fill the rest. Stateless: derived every request.
  */
 export function foldAnchorMessageIds(
-    originalMessages: readonly { id?: string; role?: string; contentType?: string }[],
+    originalMessages: readonly AnchorMessage[],
     processed: readonly { id?: string }[],
     blocks: readonly { active: boolean; createdAt: number; effectiveMessageIds: readonly string[] }[],
     limit: number,
-    accept: (message: { id?: string; role?: string; contentType?: string }) => boolean = () => true,
+    accept: (message: AnchorMessage) => boolean = () => true,
 ): string[] {
     const active = blocks.filter((block) => block.active && block.effectiveMessageIds.length > 0);
     const blocksByBase = new Map<string, number[]>();
@@ -146,10 +148,10 @@ export function foldAnchorMessageIds(
 
 /** The newest fold's anchor alone (see foldAnchorMessageIds). */
 export function foldAnchorMessageId(
-    originalMessages: readonly { id?: string; role?: string }[],
+    originalMessages: readonly AnchorMessage[],
     processed: readonly { id?: string }[],
     blocks: readonly { active: boolean; createdAt: number; effectiveMessageIds: readonly string[] }[],
-    accept?: (message: { id?: string; role?: string }) => boolean,
+    accept?: (message: AnchorMessage) => boolean,
 ): string | undefined {
     const newest = blocks.reduce<(typeof blocks)[number] | undefined>((best, block) => (block.active && block.effectiveMessageIds.length > 0 && (best === undefined || block.createdAt >= best.createdAt) ? block : best), undefined);
     if (newest === undefined) return undefined;
@@ -168,7 +170,7 @@ export function withAnthropicFoldAnchor(
     system: unknown,
     tools: unknown,
 ): Map<string, unknown> {
-    if (knobNoCacheControl() || anchorId === undefined || clientMarks.has(anchorId)) return clientMarks;
+    if (anchorId === undefined || clientMarks.has(anchorId)) return clientMarks;
     const entries = [...(Array.isArray(system) ? system : []), ...(Array.isArray(tools) ? tools : [])] as ({ cache_control?: unknown } | null)[];
     const marks = [...entries.map((entry) => entry?.cache_control), ...clientMarks.values()].filter(Boolean) as { ttl?: unknown }[];
     const long = marks.some((mark) => mark.ttl === "1h");
@@ -176,24 +178,53 @@ export function withAnthropicFoldAnchor(
     return new Map(clientMarks).set(anchorId, long ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" });
 }
 
-export function isCopilotOrigin(origin: string | undefined): boolean {
-    if (!origin) return false;
-    try {
-        const host = new URL(origin).hostname.toLowerCase();
-        return host === "githubcopilot.com" || host.endsWith(".githubcopilot.com");
-    } catch {
-        return false;
-    }
+/**
+ * Which upstreams get fold anchors, and how. Anything not listed gets none, so
+ * a new vendor never sees a marker it was not checked against.
+ * - anthropic: Anthropic and Copilot (Claude). One anchor (the 4-mark budget),
+ *   on a message the Anthropic encoder can mark: not thinking, not a block it
+ *   passes through verbatim.
+ * - responses: Copilot only (other Responses hosts may reject the field; the
+ *   Codex subscription backend does). Up to 40 anchors, on a user message or
+ *   a tool result; Copilot keeps the latest 50 explicit breakpoints findable.
+ */
+const FOLD_ANCHOR_VENDORS: Record<"anthropic" | "responses", { hosts: string[]; limit: number; accept: (m: AnchorMessage) => boolean }> = {
+    anthropic: {
+        hosts: ["anthropic.com", "githubcopilot.com"],
+        limit: 1,
+        accept: (m) => !m.rawAnthropicMessage && (m.contentType === "tool-call" || ((m.contentType === "text" || m.contentType === "tool-result") && !m.rawAnthropicBlock)),
+    },
+    responses: {
+        hosts: ["githubcopilot.com"],
+        limit: 40,
+        accept: (m) => m.role === "user" || m.contentType === "tool-result",
+    },
+};
+
+let extraFoldAnchorHosts: string[] = [];
+/** Tests: treat these hosts (e.g. 127.0.0.1) as listed vendors. */
+export function _setFoldAnchorHostsForTest(hosts: string[]): void {
+    extraFoldAnchorHosts = hosts;
 }
 
-/** Copilot keeps the latest 50 explicit breakpoints findable; 40 leaves headroom. */
-export const RESPONSES_FOLD_ANCHOR_LIMIT = 40;
+export function foldAnchorPolicy(wire: "anthropic" | "responses", origin: string | undefined): { limit: number; accept: (m: AnchorMessage) => boolean } | undefined {
+    if (!origin || knobNoCacheControl()) return undefined;
+    let host: string;
+    try {
+        host = new URL(origin).hostname.toLowerCase();
+    } catch {
+        return undefined;
+    }
+    const vendor = FOLD_ANCHOR_VENDORS[wire];
+    const listed = [...vendor.hosts, ...extraFoldAnchorHosts].some((domain) => host === domain || host.endsWith(`.${domain}`));
+    return listed ? vendor : undefined;
+}
 
 /**
  * Stamp `prompt_cache_breakpoint` on the last input_text part of each anchor's
  * user message item or function_call_output (string content becomes one
  * input_text part). Copilot writes an entry at either; callers gate on
- * isCopilotOrigin. Items are found by reference in the layout and replaced by
+ * foldAnchorPolicy. Items are found by reference in the layout and replaced by
  * copies, so the client's parsed input is never mutated.
  */
 export function withResponsesFoldAnchor<T>(
@@ -201,7 +232,6 @@ export function withResponsesFoldAnchor<T>(
     layout: readonly { original: unknown; coreId?: string; coreIds?: string[] }[],
     anchorIds: readonly string[],
 ): T[] {
-    if (knobNoCacheControl()) return items;
     let out = items;
     for (const anchorId of anchorIds) {
         const slot = layout.find((s) => s.coreId === anchorId || s.coreIds?.includes(anchorId));

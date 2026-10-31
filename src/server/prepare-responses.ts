@@ -7,7 +7,7 @@ import { resolveAbsorbSettings } from "../compress-settings.js";
 import { effectivePromptCacheRouting, resolveCompressProtocol, type CompressSettings, type ProxyOptions } from "../config.js";
 import { currentCalibrationFactor, strippedResponseIdWarning } from "../util.js";
 import { applyReasoningDrop, diagNudge, diagTagSummary, deriveTitle, effectiveTokenCount, imageBillingFor, imageReserveFor, imageTokenCapFor, isAutoInjectedNotification, planReasoningDrop, repairResponsesAssistantOrdering, reapOrphansLogged, resolveKnownOutputCeiling, runNudgeDecision, stripKernelSummaries, usageGradeInputBaseline, warnResponsesReasoningPairs, type Prepared } from "../server.js";
-import { foldAnchorMessageIds, isCopilotOrigin, RESPONSES_FOLD_ANCHOR_LIMIT, withResponsesFoldAnchor } from "../loop/cache-control.js";
+import { foldAnchorMessageIds, foldAnchorPolicy, withResponsesFoldAnchor } from "../loop/cache-control.js";
 import { yieldToEventLoop } from "../yield-loop.js";
 import { buildDecisionPrompt, buildDirectiveText, consumeFallback, ladderMode, resolveDecisionRange, stripDecisionReasoningFields, type DecideConfig } from "../nudge-decide.js";
 import { excludeDeadRefRanges } from "../acp-status.js";
@@ -415,9 +415,10 @@ reconcileFoldCoverage(session, msgs, { mode: foldMode, sessionId, log, markerStr
         }
         reapOrphansLogged(session, msgs, log, sessionId);
         rebuiltInput = patchResponsesInput(projection, processedMessages);
-        // Fold anchors (Copilot only): see foldAnchorMessageIds.
-        if (Array.isArray(rebuiltInput) && isCopilotOrigin(upstreamOrigin)) {
-            rebuiltInput = withResponsesFoldAnchor(rebuiltInput, projection.layout, foldAnchorMessageIds(originalMessages, processedMessages, turn.state.blocks, RESPONSES_FOLD_ANCHOR_LIMIT, (m) => m.role === "user" || m.contentType === "tool-result"));
+        // Fold anchors (listed vendors only): see foldAnchorPolicy.
+        const anchorPolicy = foldAnchorPolicy("responses", upstreamOrigin);
+        if (Array.isArray(rebuiltInput) && anchorPolicy) {
+            rebuiltInput = withResponsesFoldAnchor(rebuiltInput, projection.layout, foldAnchorMessageIds(originalMessages, processedMessages, turn.state.blocks, anchorPolicy.limit, anchorPolicy.accept));
         }
         if (Array.isArray(rebuiltInput)) rebuiltInput = mergeAdjacentConfigurationUpdates(hoistTrappedToolItems(rebuiltInput));
         // #3400: the Responses steady path rebuilds items from the RAW parsed
