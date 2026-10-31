@@ -140,7 +140,7 @@ const dnsResolveHost: ResolveHost = async (host) => {
     }
 };
 
-export type WorkerProbe = (host: string) => Promise<string[]>;
+type WorkerProbe = (host: string) => Promise<string[]>;
 
 // Runs in a throwaway worker thread: its libuv thread pool is brand new, so a
 // stuck main-pool getaddrinfo state cannot follow it in (#5222). workerData
