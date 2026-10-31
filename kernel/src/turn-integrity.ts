@@ -158,6 +158,39 @@ export interface IntegrityPre {
   callIdByMessageId: Map<string, string>;
   resultIdByCallId: Map<string, string>;
   groups: string[][];
+  /** INV3 (#4885) signed assistant runs, see computeSignedRuns. */
+  signedRuns: string[][];
+}
+
+/** #4885: maximal runs of consecutive assistant-role messages that carry at
+ *  least one signed thinking-family block. Rebuild merges each run into ONE
+ *  provider message, so a partially folded run desynchronizes the signature
+ *  from its context. Tool results (role "tool") break runs by construction. */
+function computeSignedRuns(messages: CoreMessage[]): string[][] {
+  const signedRuns: string[][] = [];
+  let i = 0;
+  while (i < messages.length) {
+    if (messages[i]!.role !== "assistant") {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < messages.length && messages[j + 1]!.role === "assistant")
+      j++;
+    let signed = false;
+    for (let k = i; k <= j && !signed; k++)
+      signed = isSignedThinkingFamily(messages[k]!);
+    if (signed) {
+      const members: string[] = [];
+      for (let k = i; k <= j; k++) {
+        const id = messages[k]!.id;
+        if (id) members.push(id);
+      }
+      signedRuns.push(members);
+    }
+    i = j + 1;
+  }
+  return signedRuns;
 }
 
 /** One-pass build of {@link IntegrityPre} for a message array. */
@@ -190,6 +223,7 @@ export function buildIntegrityPre(messages: CoreMessage[]): IntegrityPre {
     callIdByMessageId,
     resultIdByCallId,
     groups: computeTurnGroups(messages),
+    signedRuns: computeSignedRuns(messages),
   };
 }
 
@@ -237,35 +271,7 @@ export function computeIntegrityWithdrawals(
   const resultIdByCallId = built.resultIdByCallId;
   const groups = built.groups;
 
-  // #4885: maximal runs of consecutive assistant-role messages that carry at
-  // least one signed thinking-family block. Rebuild merges each run into ONE
-  // provider message, so a partially folded run desynchronizes the signature
-  // from its context. Tool results (role "tool") break runs by construction.
-  const signedRuns: string[][] = [];
-  {
-    let i = 0;
-    while (i < messages.length) {
-      if (messages[i]!.role !== "assistant") {
-        i++;
-        continue;
-      }
-      let j = i;
-      while (j + 1 < messages.length && messages[j + 1]!.role === "assistant")
-        j++;
-      let signed = false;
-      for (let k = i; k <= j && !signed; k++)
-        signed = isSignedThinkingFamily(messages[k]!);
-      if (signed) {
-        const members: string[] = [];
-        for (let k = i; k <= j; k++) {
-          const id = messages[k]!.id;
-          if (id) members.push(id);
-        }
-        signedRuns.push(members);
-      }
-      i = j + 1;
-    }
-  }
+  const signedRuns = built.signedRuns;
   const handledSignedRuns = new Set<number>();
   let signedRunWithdrawals = 0;
 
