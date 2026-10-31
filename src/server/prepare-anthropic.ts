@@ -28,7 +28,7 @@ import { detectGenerationBoundary } from "../generation-boundary.js";
 import { attachSubagentSessions } from "../subagent-sessions.js";
 import { estimateCoreMessages, estimateCoreMessagesUpper, extractBillingAttributionBlock } from "../preflight.js";
 import { dshNativeCompactionWitness, recordConflict } from "../conflict-watch.js";
-import { anthropicToolsCarryCacheControl, computeAnthropicMessageMarks, stampAnthropicSystemCacheControl } from "../loop/cache-control.js";
+import { anthropicToolsCarryCacheControl, computeAnthropicMessageMarks, foldAnchorMessageId, stampAnthropicSystemCacheControl, withAnthropicFoldAnchor } from "../loop/cache-control.js";
 import { reconcileSystemAnchor } from "../system-anchor.js";
 import { isStrictReasoningEcho, modelIdOf } from "../strict-echo.js";
 import { logRawStripCounts, markerArtifactCount, stripRawStage } from "../marker/engine.js";
@@ -474,11 +474,16 @@ export async function prepareAnthropic(
         // uses — `anthropicCacheMarks ?? cacheControls`. The client's harvested
         // map is the fallback the rebuild applies when bili adds no marks of its
         // own (a client-managed session), so its trigger-turn breakpoint survives.
-        clientCacheControls = cacheControls;
+        // Fold anchor: a client-managed session (pi) gets one extra breakpoint
+        // just before the newest folded range, so the next fold re-reads the
+        // prefix up to there instead of falling back to the system head.
+        clientCacheControls = anthropicCacheMarks === undefined
+            ? withAnthropicFoldAnchor(cacheControls, foldAnchorMessageId(originalMessages, processedMessages, turn.state.blocks), parsed.system, parsed.tools)
+            : cacheControls;
         // #3400: egress image rescale — outbound copies only; the originals
         // stay in session state/persistence untouched.
         const egressMessages = await applyImageRescalePass(processedMessages as BiliMessage[], { session, sessionId, log, maxDim: imageRescaleMaxDim(), toolArmed: imageRescaleToolArmed(session) });
-        rebuiltMessages = coreToAnthropic(egressMessages, anthropicCacheMarks ?? cacheControls);
+        rebuiltMessages = coreToAnthropic(egressMessages, anthropicCacheMarks ?? clientCacheControls);
         if (sysNotes.length > 0) {
             rebuiltMessages = [...rebuiltMessages, ...sysNotes.map((text) => ({ role: "user" as const, content: text }))];
         }
