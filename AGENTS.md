@@ -296,3 +296,7 @@ Of 326 analyzed merged PRs, 26 (~7%) needed a second+ human review round. Two dr
 2. **Incomplete first pass** — the initial fix addresses the reported symptom but misses an adjacent path/edge case, leaves promised work unfinished, or needs its approach reconsidered. Gate signal: does the fix cover ALL paths of the bug, not just the repro?
 
 These map directly onto §7.2–7.3; a reviewer walks those bullets in order.
+
+## Fork rule: test models (Zayik fork, owner rule 2026-10-31)
+
+Every test, probe or live check that sends requests to a real provider uses the cheap model of the family only: GPT-6 Luna (never Terra) and Haiku 5.5 (never Opus), including "just one confirming request". Cache and provider rules are provider-level, so results transfer. A paid run also needs the owner's explicit spend approval.
