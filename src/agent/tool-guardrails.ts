@@ -145,18 +145,26 @@ function formatBytes(n: number): string {
     return n >= 1024 ? `${(n / 1024).toFixed(1)}KB` : `${n}B`;
 }
 
-// --- Generic tool-call repetition guard (ported from bcp #308) ---
+// --- Generic tool-call repetition guard (ported from bcp #308; escalation
+// retuned by #5225) ---
 // A greedy small model can re-emit the same (assistant -> toolResult) pair every
 // turn; token penalties can't break that attractor, so we key on canonical
 // identity of consecutive calls (arguments compared key-order-insensitively via
-// canonicalStringify). At `warn` append a strong warning to the matching
-// toolResult; at `abort` refuse the call (block) and abort the turn. Any
-// arg/tool change resets the run, and so does a previous identical call that
-// actually EXECUTED for >= REPEAT_SLOW_CALL_MS (#5225): wall-clock work between
-// repeats means long-polling external state (e.g. an MCP wait tool), not a
-// rapid degenerate loop — escalation only continues while the run stays rapid.
-// Without duration evidence (missing/out-of-order results) the count-only
-// behavior stands, which is the fail-safe direction.
+// canonicalStringify). Escalation has TWO dimensions (#5225):
+// 1) Rapidity: any arg/tool change resets the run, and so does a previous
+//    identical call that actually EXECUTED for >= REPEAT_SLOW_CALL_MS —
+//    wall-clock work between repeats means long-polling external state (e.g.
+//    an MCP wait tool), not a rapid degenerate loop. Escalation only continues
+//    while the run stays rapid. Without duration evidence (missing/out-of-order
+//    results) the count-only behavior stands, which is the fail-safe direction.
+// 2) Staging: warnings up to the `warn` threshold; at the `abort` threshold
+//    REFUSE that one call with an explicit final warning while keeping the turn
+//    alive (a model mid-legit-poll can still react — a refused call produces no
+//    result, so no duration evidence accumulates and the ladder advances);
+//    ONLY the next identical call refuses AND aborts the turn. The old
+//    single-step warn->kill aborted legitimate bounded polling (wait tools
+//    re-issue identical args by design; the result changes with external
+//    state, the arguments do not) before its deadline.
 const REPEAT_SLOW_CALL_MS = 5000;
 export function canonicalStringify(value: unknown): string {
     if (value === null || value === undefined || typeof value !== "object") {
@@ -184,7 +192,7 @@ export function repetitionFingerprint(toolName: string, input: unknown): string 
     }
 }
 
-type RepetitionAction = "none" | "warn" | "abort";
+type RepetitionAction = "none" | "warn" | "final-refuse" | "abort";
 interface RepetitionDecision {
     action: RepetitionAction;
     count: number;
@@ -213,7 +221,8 @@ export class RepetitionTracker {
         }
         if (toolCallId !== undefined) this.pendingStarts.set(toolCallId, { fp, startedAt: now });
         let action: RepetitionAction = "none";
-        if (this.count >= this.thresholds.abort) action = "abort";
+        if (this.count > this.thresholds.abort) action = "abort";
+        else if (this.count === this.thresholds.abort) action = "final-refuse";
         else if (this.count >= this.thresholds.warn) action = "warn";
         return { action, count: this.count, fingerprint: fp, toolName };
     }
@@ -236,11 +245,15 @@ export class RepetitionTracker {
 }
 
 function buildRepetitionWarnNotice(toolName: string, count: number): string {
-    return `\n\n[ACP guardrail: you have issued ${count} CONSECUTIVE identical \`${toolName}\` calls in quick succession (same tool, equivalent arguments — key order aside). If nothing changed since the last result, re-issuing this exact call will not help. STOP repeating it: verify what changed since the last result, take a different step, or stop and report to the user.]`;
+    return `\n\n[ACP guardrail: WARNING — you have issued ${count} CONSECUTIVE identical \`${toolName}\` calls in quick succession (same tool, equivalent arguments — key order aside). If nothing changed since the last result, re-issuing this exact call will not help; if you are deliberately waiting/polling external state, one LONGER wait beats repeated short polls. Continuing the identical call escalates to a hard refusal before the turn is aborted.]`;
+}
+
+function buildRepetitionFinalRefuseNotice(toolName: string, count: number): string {
+    return `[ACP guardrail: REFUSED — you issued ${count} consecutive identical \`${toolName}\` calls in quick succession (equivalent arguments, key order aside). This call was refused and NOT executed. FINAL WARNING: if the very next call is identical again, the entire turn will be ABORTED. If you were waiting/polling external state, issue ONE longer wait instead (larger duration argument) or stop and report to the user. Changing the tool or ANY argument restarts the count.]`;
 }
 
 function buildRepetitionAbortNotice(toolName: string, count: number): string {
-    return `[ACP guardrail: BLOCKED — you issued ${count} consecutive identical \`${toolName}\` calls in quick succession (equivalent arguments, key order aside). This call was refused and NOT executed. You MUST change strategy: take a different step, use a different tool, or stop and report to the user. Do not re-issue the identical call. The turn has been aborted.`;
+    return `[ACP guardrail: BLOCKED — you issued ${count} consecutive identical \`${toolName}\` calls in quick succession despite the final refusal. This call was refused and NOT executed. You MUST change strategy: use different arguments, a different tool, or stop and report to the user. Do not re-issue the identical call. The turn has been aborted.`;
 }
 
 export interface GuardrailOptions {
@@ -287,6 +300,16 @@ export function wireToolGuardrails(pi: ExtensionAPI, opts: GuardrailOptions = {}
             trackers.set(sid, tracker);
         }
         const decision = tracker.note(e.toolName, e.input, e.toolCallId);
+        if (decision.action === "final-refuse") {
+            const msg = buildRepetitionFinalRefuseNotice(decision.toolName, decision.count);
+            if (ctx?.ui?.notify) ctx?.ui?.notify(`[ACP] ${msg}`, "warning");
+            // Deliberately NO ctx.abort() here: the refusal itself IS the final
+            // warning. The model sees this text and can still react (change
+            // args / pick another tool => the run resets). Only the NEXT
+            // identical call kills the turn (#5225: legitimate bounded polling
+            // must survive the warning stage).
+            return { block: true, reason: msg };
+        }
         if (decision.action === "abort") {
             const msg = buildRepetitionAbortNotice(decision.toolName, decision.count);
             if (ctx?.ui?.notify) ctx?.ui?.notify(`[ACP] ${msg}`, "warning");

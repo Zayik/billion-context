@@ -3,7 +3,9 @@
 // out its documented interval observing external state — e.g. an MCP wait tool)
 // got its 5th poll blocked and the whole turn aborted. The fix keys escalation
 // on RAPIDITY: a prior identical call that actually executed for >= 5s restarts
-// the run; rapid degenerate loops still warn@3 / abort@5 exactly as before.
+// the run. Rapid degenerate loops still escalate, now staged (#5225): warn@3,
+// ONE live refusal at 5 (turn stays alive so a mid-poll model can switch to a
+// longer wait), kill only on the identical repeat after that refusal.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { wireToolGuardrails, RepetitionTracker } from "../src/agent/tool-guardrails.ts";
@@ -64,9 +66,11 @@ test("#5225: five 10s-spaced identical polls never escalate (no block, no abort)
     assert.equal(w.ctx.abortCalls, 0, "turn must NOT be aborted during legitimate long polling");
 });
 
-test("#5225: rapid identical loop still warns at 3 and aborts at 5 (guard not weakened)", () => {
+test("#5225: rapid identical loop escalates staged — refusal at 5, kill only on the repeat after it", () => {
     const w = makePollHarness();
     let fifth: unknown;
+    let sixth: unknown;
+    let abortAfterFifth = -1;
     withFakeClock((tick) => {
         for (let i = 1; i <= 5; i++) {
             tick(50); // machine-fast repeats: each prior call completed in ~50ms
@@ -74,10 +78,34 @@ test("#5225: rapid identical loop still warns at 3 and aborts at 5 (guard not we
             tick(50);
             w.result(`q${i}`);
         }
+        abortAfterFifth = w.ctx.abortCalls;
+        sixth = w.call("q6", { seconds: 10 });
     });
-    assert.equal((fifth as { block?: boolean })?.block, true, "5th rapid identical call must be blocked");
-    assert.match((fifth as { reason?: string })?.reason ?? "", /BLOCKED/);
-    assert.equal(w.ctx.abortCalls, 1, "turn must be aborted exactly once");
+    assert.equal((fifth as { block?: boolean })?.block, true, "5th rapid identical call is refused (not executed)");
+    assert.match((fifth as { reason?: string })?.reason ?? "", /REFUSED/);
+    assert.match((fifth as { reason?: string })?.reason ?? "", /FINAL WARNING/);
+    assert.equal(abortAfterFifth, 0, "the refusal must NOT kill the turn — one live chance to change approach");
+    assert.equal((sixth as { block?: boolean })?.block, true, "the identical repeat after the refusal is blocked");
+    assert.match((sixth as { reason?: string })?.reason ?? "", /BLOCKED/);
+    assert.equal(w.ctx.abortCalls, 1, "turn aborted exactly once, at the repeat after the final refusal");
+});
+
+test("#5225: rapid loop escapes the final refusal via ONE longer wait (staging composes with polling advice)", () => {
+    const w = makePollHarness();
+    withFakeClock((tick) => {
+        for (let i = 1; i <= 5; i++) {
+            tick(50);
+            w.call(`e${i}`, { seconds: 10 });
+            tick(50);
+            w.result(`e${i}`);
+        }
+        const longer = w.call("e6", { seconds: 60 });
+        assert.equal(longer, undefined, "changed arguments reset the run and execute");
+        tick(60_000);
+        w.result("e6");
+        assert.equal(w.call("e7", { seconds: 10 }), undefined, "back to the old args restarts the count at 1");
+    });
+    assert.equal(w.ctx.abortCalls, 0, "a model that heeds the refusal never reaches the kill");
 });
 
 test("#5225: warning text no longer claims byte-for-byte identity or a guaranteed stale result", () => {
@@ -135,22 +163,26 @@ test("RepetitionTracker: a prior identical call that ran >= 5s restarts the run 
     assert.equal(t.note("wait", { seconds: 10 }, "a4", T0 + 23_000).action, "none", "polling must never reach warn/abort");
 });
 
-test("RepetitionTracker: fast identical calls keep escalating to abort (fail-safe unchanged)", () => {
+test("RepetitionTracker: fast identical calls escalate staged — final-refuse at 5, abort at 6 (fail-safe unchanged)", () => {
     const t = new RepetitionTracker({ warn: 3, abort: 5 });
     let d = { action: "none" as string, count: 0 };
     for (let i = 1; i <= 5; i++) {
         d = t.note("w", {}, `f${i}`, T0 + i * 100);
         t.complete(`f${i}`, T0 + i * 100 + 900); // 900ms < 5000 threshold
     }
-    assert.equal(d.action, "abort");
+    assert.equal(d.action, "final-refuse", "the 5th is the single live refusal");
     assert.equal(d.count, 5);
+    const d6 = t.note("w", {}, "f6", T0 + 6 * 100);
+    assert.equal(d6.action, "abort", "only the repeat after the refusal aborts");
+    assert.equal(d6.count, 6);
 });
 
 test("RepetitionTracker: duration evidence without any complete() leaves count-only behavior standing", () => {
     const t = new RepetitionTracker({ warn: 3, abort: 5 });
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 4; i++) {
         t.note("w", {}, `n${i}`, T0 + i * 10);
     }
+    assert.equal(t.note("w", {}, "n5", T0 + 50).action, "final-refuse", "missing results -> ladder still staged");
     assert.equal(t.note("w", {}, "n6", T0 + 60).action, "abort", "missing results -> legacy count-only escalation");
 });
 
