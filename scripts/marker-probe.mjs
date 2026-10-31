@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-// Paid probe: how many explicit cache markers Copilot GPT-6.1 Terra takes, and
+// Paid probe: how many explicit cache markers Copilot GPT Responses models take, and
 // whether markers from earlier requests stay findable after a mid-history edit.
 // Synthetic content only. Dry run unless --run is given; a hard dollar cap stops
 // the run before any request whose worst-case cost would cross it.
 //
-//   node scripts/terra-marker-probe.mjs [--probe E1|E2|all] [--run] [--cap 1.00] [--auth <pi auth.json>]
+//   node scripts/marker-probe.mjs [--probe E1|E2|all] [--run] [--cap 1.00] [--auth <pi auth.json>] [--model <id>]
+//
+// Project rule: billion-context tests use the cheap model only (GPT-6 Luna by
+// default). Terra results from 2026-10-31 are recorded in PR #10.
 //
 // E1  Per-request limit: fresh prefixes carrying 3, 4, 5 and 8 explicit
 //     breakpoints. OpenAI documents 4 writes per request (the implicit end
@@ -29,10 +32,12 @@ const flag = (name, fallback) => {
 const RUN = args.includes("--run");
 const PROBE = flag("--probe", "all");
 const CAP = Number(flag("--cap", "1.00"));
+const MODEL = flag("--model", "gpt-6-luna");
 const AUTH = flag("--auth", process.env.PI_AUTH_FILE ?? path.join(os.homedir(), ".pi", "agent", "auth.json"));
 const OUT = flag("--out", process.env.CACHE_PROBE_OUT ?? path.join(os.homedir(), ".cache", "billion-context", "cache-probes"));
 
 const PRICES = {
+    // Terra-level prices: an upper bound for Luna, so the cap stays conservative.
     terra: { in: 1, read: 0.05, write: 1.25, write1h: 1.25, out: 5 },
 };
 
@@ -160,7 +165,7 @@ function input(seed, { marks = [], editTurn = -1, extraRounds = 0 } = {}) {
 // Approximate token count of the prefix through turn t (developer + t turns).
 const through = (t) => `~${(1500 + t * (TURN_TOKENS + 8)).toLocaleString()} tok`;
 
-const body = (items, key) => ({ model: "gpt-6.1-terra", input: items, max_output_tokens: 16, reasoning: { effort: "none" }, store: false, stream: false, prompt_cache_key: key });
+const body = (items, key) => ({ model: MODEL, input: items, max_output_tokens: 16, reasoning: { effort: "none" }, store: false, stream: false, prompt_cache_key: key });
 const terraSend = (name, items, key) => send(name, "terra", RUN ? `${copilotBase()}/responses` : "dry-run", body(items, key));
 
 async function probeE1() {
