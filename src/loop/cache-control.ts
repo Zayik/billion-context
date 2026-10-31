@@ -104,7 +104,8 @@ export function stampAnthropicSystemCacheControl(systemOut: AnthropicRequestBody
  * after the fold and read back after later ones.
  *
  * One anchor per active block, newest block first, deduplicated, at most
- * `limit`. Anthropic has room for one (the newest); Copilot Terra keeps old
+ * `limit`; over the cap the two oldest stay (the provider always checks the
+ * first two breakpoints) and the newest fill the rest. Anthropic has room for one (the newest); Copilot Terra keeps old
  * breakpoints findable (first 2 + latest 50) and re-sending them is free, so
  * it carries many, which also covers a fold that reaches back past the
  * previous one. The breakpoint field is not part of the cached bytes, so an
@@ -142,13 +143,16 @@ export function foldAnchorMessageIds(
         if (visible.has(id) && accept(message)) last = id;
     }
     const order = active.map((block, index) => ({ createdAt: block.createdAt, index })).sort((a, b) => b.createdAt - a.createdAt || b.index - a.index);
-    const out: string[] = [];
+    const all: string[] = [];
     for (const { index } of order) {
         const anchor = anchorOf.get(index);
-        if (anchor !== undefined && !out.includes(anchor)) out.push(anchor);
-        if (out.length >= limit) break;
+        if (anchor !== undefined && !all.includes(anchor)) all.push(anchor);
     }
-    return out;
+    if (all.length <= limit) return all;
+    // Over the cap: keep the two oldest (the provider always checks the first
+    // two breakpoints) and fill the rest with the newest.
+    const keepOldest = limit > 2 ? 2 : 0;
+    return [...all.slice(0, limit - keepOldest), ...all.slice(all.length - keepOldest)];
 }
 
 /** The newest fold's anchor alone (see foldAnchorMessageIds). */

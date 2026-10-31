@@ -68,6 +68,17 @@ test("fold anchors: one per active fold, newest first, deduplicated and capped",
     assert.deepEqual(foldAnchorMessageIds(original, processed, [], 10), []);
 });
 
+test("fold anchors: over the cap, the two oldest stay and the newest fill the rest", () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `u${i + 1}`);
+    const original = ids.map((id) => ({ id, role: "user" }));
+    // Fold every even message; each anchor is the odd message just before it.
+    const blocks = ids.filter((_, i) => i % 2 === 1).map((id, k) => block(k + 1, [id]));
+    const processed = original.filter((_, i) => i % 2 === 0);
+    assert.deepEqual(foldAnchorMessageIds(original, processed, blocks, 10), ["u11", "u9", "u7", "u5", "u3", "u1"]);
+    assert.deepEqual(foldAnchorMessageIds(original, processed, blocks, 4), ["u11", "u9", "u3", "u1"]);
+    assert.deepEqual(foldAnchorMessageIds(original, processed, blocks, 2), ["u11", "u9"]);
+});
+
 test("anthropic fold anchor: added within the 4-breakpoint budget, client marks kept", () => {
     const client = new Map<string, unknown>([["u9", { type: "ephemeral" }]]);
     const system = [{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }];
