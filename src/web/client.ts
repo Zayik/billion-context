@@ -1271,12 +1271,12 @@ function changelogCatOf(rawLine) {
         const dwEl = $("dns-wedge-banner");
         if (dwEl) {
             const dw = d.resolverWedge;
-            if (dw && dw.wedged && dw.hosts.length > 0) {
+            if (dw && dw.tripped && dw.hosts.length > 0) {
                 dwEl.hidden = false;
                 dwEl.classList.add("show");
                 const shown = dw.hosts.slice(0, 5).map((h: string) => escapeHtml(h)).join(", ");
                 const more = dw.hosts.length > 5 ? " " + escapeHtml(t("sys.dns_wedge_more", { n: String(dw.hosts.length - 5) })) : "";
-                const sinceText = dw.detectedAt ? new Date(dw.detectedAt).toLocaleString() : "?";
+                const sinceText = dw.sinceMs ? new Date(dw.sinceMs).toLocaleString() : "?";
                 dwEl.innerHTML = "<strong>" + t("sys.dns_wedge_title") + "</strong> <span class=\"mono\">" + shown + more + "</span>"
                     + "<div>" + escapeHtml(t("sys.dns_wedge_remedy", { since: sinceText })) + "</div>";
             } else {

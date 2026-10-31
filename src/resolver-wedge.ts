@@ -1,108 +1,110 @@
-// #5222 Phase 2: persistent process-local resolver wedge — detection + visibility.
-// Owner decision 2026-10-31: NO self-restart ("bili does not kill itself") — when a
-// long-lived proxy's main-thread DNS pool wedges after an OS-level network change
-// (WSL/VPN switch), DETECT it and SURFACE it (panel banner + /__bili/status) instead.
-// Process behavior is unchanged: this module only records evidence and reports.
-//
-// Triple gate (all required, per owner spec):
-//   G1 — at least WEDGE_MIN_HOSTS distinct hosts are failing;
-//   G2 — each such host resolved successfully RECENTLY (last success within
-//        WEDGE_SUCCESS_RECENCY_MS) — proves the names are alive and the regression
-//        is on the resolver side, not dead domains;
-//   G3 — each such host has been failing CONTINUOUSLY for at least WEDGE_SUSTAIN_MS
-//        (no success since) — filters transient blips.
-//
-// Evidence source: tunnel-admission MAIN-pool outcomes (one record per
-// checkTunnelDestination). Outbound undici connects resolve inside libuv and are not
-// observable here — admission is this process's only resolver observation point. The
-// worker-thread probe (#5222 Phase 1) mitigates admission but does NOT heal the pool
-// (outbound connects still use the wedged pool), so detector evidence stays on the
-// main-pool outcome even when the worker stage admitted the request.
-
+/**
+ * #5221 (Phase 2, owner ruling 2026-10-31): persistent local-resolver WEDGE
+ * detector + alarm surface. Detection only — the process NEVER restarts or
+ * retries differently on its own; the ruling was "if it heals, it heals
+ * without a restart; a restart at most earns an ALARM".
+ *
+ * Mechanism (#5221 evidence): a long-lived process can hold stale OS-resolver
+ * state after a WSL/VPN/MagicDNS change — glibc caches resolv.conf and libuv
+ * getaddrinfo ages out — so every tunnel admission's name lookup times out
+ * while a freshly spawned process on the same machine resolves fine. The
+ * wedge is per-PROCESS: it is proven by "this process resolved these hosts
+ * successfully before and has now failed every attempt for minutes straight".
+ *
+ * Evidence gates (all required, no config surface by design):
+ *   1. only THROWING resolutions count as failures — an empty answer is an
+ *      authoritative NO-DATA response, i.e. the resolver IS reachable; a dead
+ *      name must never look like resolver corruption (#1686 boundary);
+ *   2. a host qualifies only if this process saw it resolve OK at least once
+ *      (a mistyped upstream that never resolved does not qualify);
+ *   3. the failure streak must run continuously for >= WEDGE_SUSTAIN_MS;
+ *   4. at least WEDGE_MIN_HOSTS distinct hosts must be wedged at once — one
+ *      poisoned destination is configuration noise, two never-green-before
+ *      hosts failing in lockstep after a network flip is the wedge signature.
+ *
+ * Recovery is derived, not latched: any successful resolution clears that
+ * host's streak; when fewer than two hosts remain wedged the alarm drops on
+ * its own (status field back to null, web banner hides).
+ *
+ * Bound: tunnel destinations are user-supplied (/bili/<url>), so the tracker
+ * is FIFO-capped at MAX_TRACKED_HOSTS in first-seen order (activity-time
+ * ordering misbehaves when a record carries a backdated clock).
+ */
 import { log as loggerLog } from "./logger.js";
-
-export interface ResolverWedgeStatus {
-    wedged: boolean;
-    hosts: string[];
-    detectedAt: number | null;
-}
-
-interface HostState {
-    /** Epoch ms of the last successful resolution in this process; 0 = never succeeded. */
-    lastSuccessAt: number;
-    /** Epoch ms when the current consecutive-failure streak began; 0 = not failing now. */
-    streakStartAt: number;
-}
 
 const WEDGE_MIN_HOSTS = 2;
 const WEDGE_SUSTAIN_MS = 5 * 60_000;
-const WEDGE_SUCCESS_RECENCY_MS = 24 * 60 * 60_000;
-// Tunnel destinations are user-supplied (/bili/<url>) — bound the map so
-// enumerating distinct hosts cannot grow it unboundedly. Eviction is FIFO by
-// FIRST SEEN (not by activity time): production timestamps are monotonic, and
-// activity-time ordering misbehaves when a record carries a backdated clock.
+const LOG_DEDUP_MS = 10 * 60_000;
 const MAX_TRACKED_HOSTS = 256;
 
-const states = new Map<string, HostState>();
-let episodeStartAt: number | null = null;
+export type ResolverWedgeWire = {
+    tripped: true;
+    /** Wall-clock ms when the earliest qualifying failure streak started. */
+    sinceMs: number;
+    elapsedMs: number;
+    /** Sorted hostnames currently wedged (full list, no truncation — the status reader owns display). */
+    hosts: string[];
+};
 
-/** Pure triple-gate evaluation over a synthetic clock (test seam). Returns the
- *  qualifying hosts (sorted) when the gate holds, else []. */
-export function evaluateWedgeHosts(stateMap: ReadonlyMap<string, HostState>, now: number): string[] {
-    const qualified: string[] = [];
-    for (const [host, s] of stateMap) {
-        if (s.streakStartAt === 0) continue;
-        if (now - s.streakStartAt < WEDGE_SUSTAIN_MS) continue; // G3: window not elapsed
-        if (s.lastSuccessAt === 0 || now - s.lastSuccessAt > WEDGE_SUCCESS_RECENCY_MS) continue; // G2
-        qualified.push(host);
-    }
-    return qualified.length >= WEDGE_MIN_HOSTS ? [...qualified].sort() : []; // G1
-}
+type HostRecord = { lastGoodAt: number | null; failSince: number | null };
+
+let hosts = new Map<string, HostRecord>();
+let nowFn: () => number = () => Date.now();
+let episodeLoggedAt = 0;
 
 function evictFirstSeen(): void {
-    if (states.size <= MAX_TRACKED_HOSTS) return;
-    const first = states.keys().next().value;
-    if (first !== undefined) states.delete(first);
+    if (hosts.size <= MAX_TRACKED_HOSTS) return;
+    const first = hosts.keys().next().value;
+    if (first !== undefined) hosts.delete(first);
 }
 
-/** Record seam: called from tunnel-guard after the main-pool retry loop. A success
- *  ends any failure streak and refreshes recency; a failure starts/extends the streak. */
-export function recordResolverOutcome(host: string, ok: boolean, now: number = Date.now()): void {
-    evictFirstSeen();
-    const cur = states.get(host) ?? { lastSuccessAt: 0, streakStartAt: 0 };
-    if (ok) {
-        cur.lastSuccessAt = now;
-        cur.streakStartAt = 0;
-    } else if (cur.streakStartAt === 0) {
-        cur.streakStartAt = now;
-    }
-    states.set(host, cur);
-    refreshEpisode(now);
-}
-
-/** Re-evaluates the gate and maintains episode state. Idempotent — called from both
- *  the record seam and the wire helper so status polls see live state; logs once per
- *  episode (false→true transition). */
-function refreshEpisode(now: number): ResolverWedgeStatus {
-    const gated = evaluateWedgeHosts(states, now);
-    if (gated.length > 0) {
-        if (episodeStartAt === null) {
-            episodeStartAt = now;
-            loggerLog("warn", `[tunnel] persistent local-DNS wedge detected: ${gated.length} previously-resolving host(s) (${gated.slice(0, 8).join(", ")}) have failed to resolve continuously for at least ${Math.round(WEDGE_SUSTAIN_MS / 60_000)} min — THIS PROCESS's resolver state is stuck (e.g. after a WSL/VPN network switch). Requests to these destinations keep failing until the proxy process is restarted (or egress is routed through an upstream proxy: -F / BILI_UPSTREAM_PROXY).`);
+function evalAndLog(now: number): ResolverWedgeWire | null {
+    const wedged: Array<[string, number]> = [];
+    for (const [host, r] of hosts) {
+        if (r.failSince !== null && r.lastGoodAt !== null && now - r.failSince >= WEDGE_SUSTAIN_MS) {
+            wedged.push([host, r.failSince]);
         }
-        return { wedged: true, hosts: gated, detectedAt: episodeStartAt };
     }
-    episodeStartAt = null;
-    return { wedged: false, hosts: [], detectedAt: null };
+    if (wedged.length < WEDGE_MIN_HOSTS) return null;
+    wedged.sort((a, b) => a[0].localeCompare(b[0]));
+    const sinceMs = Math.min(...wedged.map(([, since]) => since));
+    if (now - episodeLoggedAt >= LOG_DEDUP_MS) {
+        episodeLoggedAt = now;
+        loggerLog(
+            "warn",
+            `[resolver-wedge] suspected local-resolver wedge: ${wedged.length} host(s) this process resolved before now fail every lookup for >=${WEDGE_SUSTAIN_MS / 60000} min (${wedged.slice(0, 5).map(([h]) => h).join(", ")}${wedged.length > 5 ? ", …" : ""}) — model requests 502 until the proxy process restarts or egress routes through an upstream proxy (-F/--forward-proxy); see #5221`,
+        );
+    }
+    return { tripped: true, sinceMs, elapsedMs: now - sinceMs, hosts: wedged.map(([h]) => h) };
 }
 
-/** Wire payload shared by /__bili/status and /__bili/overview (#2152 parity). */
-export function resolverWedgeWire(): ResolverWedgeStatus {
-    return refreshEpisode(Date.now());
+/** Record ONE hostname-path resolution outcome from checkTunnelDestination.
+ *  resolvedOk=true means "the resolver ANSWERED" (even with an empty set);
+ *  false means every attempt THREW (ETIMEDOUT/EAI_AGAIN/…). IP literals and
+ *  egress-proxied destinations never call this. */
+export function resolverWedgeRecord(host: string, resolvedOk: boolean, nowMs?: number): void {
+    evictFirstSeen();
+    const key = host.toLowerCase();
+    const rec = hosts.get(key) ?? { lastGoodAt: null, failSince: null };
+    if (resolvedOk) {
+        rec.lastGoodAt = nowMs ?? nowFn();
+        rec.failSince = null;
+    } else if (rec.failSince === null) {
+        rec.failSince = nowMs ?? nowFn();
+    }
+    hosts.set(key, rec);
 }
 
-/** Test hook: clear all tracked state between scenarios. */
-export function _resetResolverWedgeForTest(): void {
-    states.clear();
-    episodeStartAt = null;
+/** Current wedge verdict + its alarm log line. Cheap to call on every
+ *  unresolvable admission AND from the 5s status poll — pure derived state. */
+export function getResolverWedgeState(nowMs?: number): ResolverWedgeWire | null {
+    return evalAndLog(nowMs ?? nowFn());
+}
+
+/** Test seams only. */
+export function _resolverWedgeTest(): { reset(): void; setNow(f: () => number): void } {
+    return {
+        reset() { hosts = new Map(); episodeLoggedAt = 0; },
+        setNow(f) { nowFn = f; },
+    };
 }

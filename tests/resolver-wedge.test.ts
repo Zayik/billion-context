@@ -1,129 +1,135 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateWedgeHosts, recordResolverOutcome, resolverWedgeWire, _resetResolverWedgeForTest } from "../src/resolver-wedge.ts";
+import { _resolverWedgeTest, getResolverWedgeState, resolverWedgeRecord } from "../src/resolver-wedge.js";
+import { checkTunnelDestination } from "../src/tunnel-guard.js";
 
-/** #5222 Phase 2: persistent process-local resolver wedge — triple-gate detector.
- *  Owner decision 2026-10-31: detect + surface only, NEVER self-restart. Gate
- *  discipline (#3617): both directions asserted — "fires when it should" AND
- *  "does NOT fire when it should not". All timing rides the synthetic-clock
- *  parameter of recordResolverOutcome / evaluateWedgeHosts — no real waits. */
+// #5221 phase 2 (owner ruling 2026-10-31): detection-only alarm — never acts.
+// Gate discipline (#3617): both directions asserted. All timing rides the
+// injected clock seam — no real waits.
 
-const SUSTAIN_MS = 5 * 60_000;
-const RECENCY_MS = 24 * 60 * 60_000;
+const MIN = 60_000;
+let clock = 0;
 
-type HostState = { lastSuccessAt: number; streakStartAt: number };
-const st = (lastSuccessAt: number, streakStartAt: number): HostState => ({ lastSuccessAt, streakStartAt });
+function setup() {
+    clock = 1_000_000;
+    _resolverWedgeTest().setNow(() => clock);
+    _resolverWedgeTest().reset();
+}
 
-test("#5222 P2 positive: two previously-resolving hosts failing past the window → gate holds", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([
-        ["alpha.example", st(now - 3600_000, now - 6 * 60_000)],
-        ["beta.example", st(now - 3600_000, now - 10 * 60_000)],
-    ]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), ["alpha.example", "beta.example"]);
+test("wedge trips only when >=2 previously-green hosts fail every lookup for >=5 min", () => {
+    setup();
+    const t0 = clock;
+    resolverWedgeRecord("api.deepseek.com", true);
+    resolverWedgeRecord("api.openai.com", true);
+    assert.equal(getResolverWedgeState(), null, "no failures yet");
+
+    resolverWedgeRecord("api.deepseek.com", false);
+    resolverWedgeRecord("api.openai.com", false);
+    assert.equal(getResolverWedgeState(), null, "the failure streak must SUSTAIN before alarming");
+
+    clock = t0 + 4 * MIN + 59_000;
+    assert.equal(getResolverWedgeState(), null, "just under the sustain window");
+
+    clock = t0 + 5 * MIN;
+    const s = getResolverWedgeState();
+    assert.ok(s, "exactly at the sustain boundary the alarm trips");
+    assert.deepEqual(s!.hosts, ["api.deepseek.com", "api.openai.com"], "hosts sorted");
+    assert.equal(s!.sinceMs, t0, "sinceMs anchors the earliest streak");
+    assert.equal(s!.elapsedMs, 5 * MIN);
 });
 
-test("#5222 P2 negative G1: a single failing host never alarms", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([["alpha.example", st(now - 3600_000, now - 6 * 60_000)]]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), []);
+test("one wedged host never alarms (#3617 negative row)", () => {
+    setup();
+    resolverWedgeRecord("only.host", true);
+    resolverWedgeRecord("only.host", false);
+    clock += 60 * MIN;
+    assert.equal(getResolverWedgeState(), null);
 });
 
-test("#5222 P2 negative G3: failures younger than the sustain window do not alarm", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([
-        ["alpha.example", st(now - 3600_000, now - (SUSTAIN_MS - 1))],
-        ["beta.example", st(now - 3600_000, now - (SUSTAIN_MS - 1))],
-    ]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), []);
+test("hosts that NEVER resolved green in this process do not qualify", () => {
+    setup();
+    resolverWedgeRecord("typo.upstream", false);
+    resolverWedgeRecord("another.dead.name", false);
+    clock += 30 * MIN;
+    assert.equal(getResolverWedgeState(), null, "a dead name is configuration noise, not resolver corruption");
 });
 
-test("#5222 P2 boundary G3: exactly at the sustain window the gate fires", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([
-        ["alpha.example", st(now - 3600_000, now - SUSTAIN_MS)],
-        ["beta.example", st(now - 3600_000, now - SUSTAIN_MS)],
-    ]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), ["alpha.example", "beta.example"]);
+test("recovery of one host drops the alarm below the two-host floor", () => {
+    setup();
+    resolverWedgeRecord("a.host", true);
+    resolverWedgeRecord("b.host", true);
+    resolverWedgeRecord("a.host", false);
+    resolverWedgeRecord("b.host", false);
+    clock += 10 * MIN;
+    assert.ok(getResolverWedgeState());
+    resolverWedgeRecord("a.host", true);
+    assert.equal(getResolverWedgeState(), null, "only b.host remains wedged — under the floor");
 });
 
-test("#5222 P2 negative G2: hosts that NEVER resolved here are dead names, not a wedge", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([
-        ["dead-a.invalid", st(0, now - 6 * 60_000)],
-        ["dead-b.invalid", st(0, now - 6 * 60_000)],
-    ]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), []);
+test("the streak anchors at FIRST failure, later retries do not restart it", () => {
+    setup();
+    resolverWedgeRecord("x.host", true);
+    resolverWedgeRecord("y.host", true);
+    const t0 = clock;
+    resolverWedgeRecord("x.host", false);
+    resolverWedgeRecord("y.host", false);
+    clock += 3 * MIN;
+    resolverWedgeRecord("x.host", false);
+    resolverWedgeRecord("y.host", false);
+    clock += 3 * MIN;
+    const s = getResolverWedgeState();
+    assert.equal(s?.sinceMs, t0);
 });
 
-test("#5222 P2 negative G2: a success older than the recency horizon does not count", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([
-        ["alpha.example", st(now - RECENCY_MS - 1, now - 6 * 60_000)],
-        ["beta.example", st(now - RECENCY_MS - 1, now - 6 * 60_000)],
-    ]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), []);
-});
-
-test("#5222 P2 negative: a mid-episode recovery breaks the streak and the gate", () => {
-    const now = Date.now();
-    const map = new Map<string, HostState>([
-        ["alpha.example", st(now - 60_000, 0)], // recovered just now
-        ["beta.example", st(now - 3600_000, now - 6 * 60_000)],
-    ]);
-    assert.deepEqual(evaluateWedgeHosts(map, now), []);
-});
-
-test("#5222 P2 wire: backdated success+failure history trips the banner state, recovery clears it", () => {
-    _resetResolverWedgeForTest();
-    try {
-        const now = Date.now();
-        assert.deepEqual(resolverWedgeWire(), { wedged: false, hosts: [], detectedAt: null }, "clean process alarms nothing");
-        recordResolverOutcome("alpha.example", true, now - 3600_000);
-        recordResolverOutcome("beta.example", true, now - 3600_000);
-        recordResolverOutcome("alpha.example", false, now - 6 * 60_000);
-        recordResolverOutcome("beta.example", false, now - 6 * 60_000);
-        const w = resolverWedgeWire();
-        assert.equal(w.wedged, true);
-        assert.deepEqual(w.hosts, ["alpha.example", "beta.example"]);
-        assert.ok(w.detectedAt !== null && w.detectedAt >= now && w.detectedAt <= Date.now());
-        // recovery of ONE host drops the gate below two hosts → alarm clears
-        recordResolverOutcome("alpha.example", true, Date.now());
-        const w2 = resolverWedgeWire();
-        assert.equal(w2.wedged, false);
-        assert.deepEqual(w2.hosts, []);
-    } finally {
-        _resetResolverWedgeForTest();
-    }
-});
-
-test("#5222 P2 wire: persistent failures on never-resolved names stay silent (no false alarm)", () => {
-    _resetResolverWedgeForTest();
-    try {
-        const now = Date.now();
-        recordResolverOutcome("dead-a.invalid", false, now - 6 * 60_000);
-        recordResolverOutcome("dead-b.invalid", false, now - 6 * 60_000);
-        assert.equal(resolverWedgeWire().wedged, false, "G2: machine-wide dead names must not be reported as a process wedge");
-    } finally {
-        _resetResolverWedgeForTest();
-    }
-});
-
-test("#5222 P2 bound: user-supplied hosts cannot grow the tracker past its cap", () => {
-    _resetResolverWedgeForTest();
-    try {
-        const now = Date.now();
-        for (let i = 0; i < 300; i++) {
-            const host = `h${i}.example`;
-            recordResolverOutcome(host, true, now - 3600_000 + i);
-            recordResolverOutcome(host, false, now - 6 * 60_000 + i);
+test("checkTunnelDestination feeds the detector: throw-only failures count, an answered-empty lookup proves the resolver alive", async () => {
+    setup();
+    let throwing = false;
+    const resolveHost = async (host: string): Promise<string[]> => {
+        if (throwing) {
+            throw Object.assign(new Error("query ETIMEDOUT"), { code: "ETIMEDOUT" });
         }
-        const w = resolverWedgeWire();
-        assert.ok(w.wedged, "the surviving hosts still qualify");
-        assert.equal(w.hosts.length, 256, "tracker is capped (MAX_TRACKED_HOSTS)");
-        assert.ok(!w.hosts.includes("h0.example") && !w.hosts.includes("h43.example"), "first-seen entries evicted first (FIFO)");
-        assert.ok(w.hosts.includes("h299.example"), "newest entries survive");
-    } finally {
-        _resetResolverWedgeForTest();
+        if (host === "empty.answer") return [];
+        return ["93.184.216.34"];
+    };
+    // workerFallback:false keeps this hermetic — the #5222 worker probe runs a REAL
+    // lookup on its own thread and must not leak network timing into this scenario.
+    const ctx: Parameters<typeof checkTunnelDestination>[1] = { clientLoopback: true, selfPort: 8787, allowlist: [], resolveHost, resolveBackoffMs: 1, workerFallback: false };
+
+    const v1 = await checkTunnelDestination("https://green.one/model", ctx);
+    assert.equal(v1.ok, true);
+    assert.equal((await checkTunnelDestination("https://green.two/model", ctx)).ok, true);
+    // authoritative empty answer: unresolvable VERDICT, but the resolver ANSWERED.
+    const empty = await checkTunnelDestination("https://empty.answer/model", ctx);
+    assert.equal(empty.ok, false);
+    assert.equal(empty.code, "unresolvable");
+    clock += 6 * MIN;
+    throwing = true;
+    const failClock = clock;
+    const f1 = await checkTunnelDestination("https://green.one/model", ctx);
+    assert.equal(f1.ok, false);
+    assert.equal((f1 as { ok: boolean; code?: string }).code, "unresolvable");
+    assert.match(f1.message, /ETIMEDOUT/);
+    await checkTunnelDestination("https://green.two/model", ctx);
+
+    assert.equal(getResolverWedgeState(), null, "the streak must sustain the full window from FIRST failure");
+    clock += 5 * MIN;
+    const s = getResolverWedgeState();
+    assert.ok(s, "both formerly-green hosts failing for >5 min must trip");
+    assert.deepEqual(s!.hosts, ["green.one", "green.two"], "the empty-answer host never entered the evidence set");
+    assert.equal(s!.sinceMs, failClock, "streaks began at first throwing lookup");
+});
+
+test("user-supplied hosts cannot grow the tracker past its cap (#5222 bound)", () => {
+    setup();
+    for (let i = 0; i < 300; i++) {
+        const h = `h${i}.example`;
+        resolverWedgeRecord(h, true);
+        resolverWedgeRecord(h, false);
     }
+    clock += 6 * MIN;
+    const s = getResolverWedgeState();
+    assert.ok(s, "the surviving hosts still qualify");
+    assert.equal(s!.hosts.length, 256, "tracker is capped (MAX_TRACKED_HOSTS)");
+    assert.ok(!s!.hosts.includes("h0.example") && !s!.hosts.includes("h43.example"), "first-seen entries evicted first (FIFO)");
+    assert.ok(s!.hosts.includes("h299.example"), "newest entries survive");
 });
