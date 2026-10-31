@@ -93,25 +93,14 @@ export function stampAnthropicSystemCacheControl(systemOut: AnthropicRequestBody
 }
 
 /**
- * Fold anchors: cache breakpoints that survive the next fold.
+ * Fold anchors: after a fold, every cache entry the client's own breakpoints
+ * wrote sits after the folded range, so the next request re-reads only the
+ * system head. A breakpoint on the last visible message before each folded
+ * range is a prefix later forward folds leave byte-identical.
  *
- * A fold removes a range from the middle of the view. Every cache entry the
- * provider holds sits at a breakpoint the client placed earlier, and those
- * all sit after the folded range, so the request after a fold re-reads only
- * the system head and re-writes the rest. Folds mostly move forward through
- * the history, so the last visible message before a folded range is a prefix
- * that later folds leave byte-identical. A breakpoint there is written once
- * after the fold and read back after later ones.
- *
- * One anchor per active block, newest block first, deduplicated, at most
- * `limit`; over the cap the two oldest stay (the provider always checks the
- * first two breakpoints) and the newest fill the rest. Anthropic has room for one (the newest); Copilot Terra keeps old
- * breakpoints findable (first 2 + latest 50) and re-sending them is free, so
- * it carries many, which also covers a fold that reaches back past the
- * previous one. The breakpoint field is not part of the cached bytes, so an
- * anchor that disappears (its block merged away) does not break the prefix.
- *
- * Stateless: derived from the active blocks every request.
+ * One anchor per active block, newest first, deduplicated, at most `limit`.
+ * Over the cap the two oldest stay (the provider always checks the first two
+ * breakpoints) and the newest fill the rest. Stateless: derived every request.
  */
 export function foldAnchorMessageIds(
     originalMessages: readonly { id?: string; role?: string; contentType?: string }[],
@@ -121,30 +110,28 @@ export function foldAnchorMessageIds(
     accept: (message: { id?: string; role?: string; contentType?: string }) => boolean = () => true,
 ): string[] {
     const active = blocks.filter((block) => block.active && block.effectiveMessageIds.length > 0);
-    if (active.length === 0 || limit <= 0) return [];
     const blocksByBase = new Map<string, number[]>();
     active.forEach((block, index) => {
         for (const id of block.effectiveMessageIds) {
             const base = baseIdOf(id);
-            const list = blocksByBase.get(base);
-            if (list) list.push(index);
-            else blocksByBase.set(base, [index]);
+            blocksByBase.set(base, [...(blocksByBase.get(base) ?? []), index]);
         }
     });
-    const visible = new Set(processed.map((m) => m.id).filter((id): id is string => typeof id === "string" && id.length > 0));
+    const visible = new Set(processed.map((m) => m.id));
     const anchorOf = new Map<number, string | undefined>();
     let last: string | undefined;
     for (const message of originalMessages) {
         const id = message.id;
-        if (typeof id !== "string" || id.length === 0) continue;
-        // A covered message the view still renders (the kernel can keep one,
-        // such as the first user message) is not where the range starts.
-        if (!visible.has(id)) {
-            for (const index of blocksByBase.get(baseIdOf(id)) ?? []) {
-                if (!anchorOf.has(index)) anchorOf.set(index, last);
-            }
+        if (!id) continue;
+        // The range starts at the first message the view drops: the kernel can
+        // keep a covered message (the first user message) on the wire.
+        if (visible.has(id)) {
+            if (accept(message)) last = id;
+            continue;
         }
-        if (visible.has(id) && accept(message)) last = id;
+        for (const index of blocksByBase.get(baseIdOf(id)) ?? []) {
+            if (!anchorOf.has(index)) anchorOf.set(index, last);
+        }
     }
     const order = active.map((block, index) => ({ createdAt: block.createdAt, index })).sort((a, b) => b.createdAt - a.createdAt || b.index - a.index);
     const all: string[] = [];
@@ -153,8 +140,6 @@ export function foldAnchorMessageIds(
         if (anchor !== undefined && !all.includes(anchor)) all.push(anchor);
     }
     if (all.length <= limit) return all;
-    // Over the cap: keep the two oldest (the provider always checks the first
-    // two breakpoints) and fill the rest with the newest.
     const keepOldest = limit > 2 ? 2 : 0;
     return [...all.slice(0, limit - keepOldest), ...all.slice(all.length - keepOldest)];
 }
@@ -171,30 +156,11 @@ export function foldAnchorMessageId(
     return foldAnchorMessageIds(originalMessages, processed, [newest], 1, accept)[0];
 }
 
-const ANTHROPIC_BREAKPOINT_LIMIT = 4;
-
-type TtlTally = { count: number; long: boolean; short: boolean };
-
-function tallyMark(tally: TtlTally, mark: unknown): void {
-    if (!mark) return;
-    tally.count++;
-    if ((mark as { ttl?: unknown }).ttl === "1h") tally.long = true;
-    else tally.short = true;
-}
-
-function tallyEntries(tally: TtlTally, entries: unknown): void {
-    if (!Array.isArray(entries)) return;
-    for (const entry of entries) tallyMark(tally, (entry as { cache_control?: unknown } | null)?.cache_control);
-}
-
 /**
- * Add the fold anchor to a CLIENT-managed Anthropic mark map (pi and other
- * hosts that place their own cache_control). bili's own cadence
- * (computeAnthropicMessageMarks) is left alone. The anchor is added only when
- * the 4-breakpoint budget across system, tools and messages has room. It
- * takes the client's TTL, and is skipped when the client mixes 1h and 5m
- * marks (a 5m breakpoint may not precede a 1h one, so a wrong guess 400s).
- * Returns the input map unchanged when no anchor applies.
+ * Add the fold anchor to a CLIENT-managed Anthropic mark map (pi), never
+ * touching the client's own marks. Added only when the 4-breakpoint budget
+ * across system, tools and messages has room. Takes the client's TTL, and is
+ * skipped when the client mixes 1h and 5m (a 5m mark may not precede a 1h one).
  */
 export function withAnthropicFoldAnchor(
     clientMarks: Map<string, unknown>,
@@ -203,21 +169,12 @@ export function withAnthropicFoldAnchor(
     tools: unknown,
 ): Map<string, unknown> {
     if (knobNoCacheControl() || anchorId === undefined || clientMarks.has(anchorId)) return clientMarks;
-    const tally: TtlTally = { count: 0, long: false, short: false };
-    tallyEntries(tally, system);
-    tallyEntries(tally, tools);
-    for (const mark of clientMarks.values()) tallyMark(tally, mark);
-    if (tally.count >= ANTHROPIC_BREAKPOINT_LIMIT || (tally.long && tally.short)) return clientMarks;
-    const out = new Map(clientMarks);
-    out.set(anchorId, tally.long ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" });
-    return out;
+    const entries = [...(Array.isArray(system) ? system : []), ...(Array.isArray(tools) ? tools : [])] as ({ cache_control?: unknown } | null)[];
+    const marks = [...entries.map((entry) => entry?.cache_control), ...clientMarks.values()].filter(Boolean) as { ttl?: unknown }[];
+    const long = marks.some((mark) => mark.ttl === "1h");
+    if (marks.length >= 4 || (long && marks.some((mark) => mark.ttl !== "1h"))) return clientMarks;
+    return new Map(clientMarks).set(anchorId, long ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" });
 }
-
-/** The explicit-breakpoint field Copilot's Responses endpoint accepts on an
- *  input content part (verified against Copilot GPT-6.1 Terra). Other
- *  Responses upstreams are not known to accept it, so callers gate on
- *  isCopilotOrigin. */
-const RESPONSES_BREAKPOINT = { mode: "explicit" } as const;
 
 export function isCopilotOrigin(origin: string | undefined): boolean {
     if (!origin) return false;
@@ -229,67 +186,37 @@ export function isCopilotOrigin(origin: string | undefined): boolean {
     }
 }
 
-/** Copilot Terra: how many fold anchors ride at once. The provider keeps the
- *  latest 50 explicit breakpoints findable; 40 leaves headroom for the
- *  client's own. */
+/** Copilot keeps the latest 50 explicit breakpoints findable; 40 leaves headroom. */
 export const RESPONSES_FOLD_ANCHOR_LIMIT = 40;
 
 /**
- * Responses counterpart of withAnthropicFoldAnchor: stamp the explicit
- * breakpoint on the last input_text part of each anchor's user item or
- * tool result. The item
- * is found by reference (patchResponsesInput re-emits an unchanged slot's
- * original object), and replaced by a copy so the client's parsed input is
- * never mutated. Returns the input unchanged when the anchor is not a plain
- * user message or tool result, or is not found.
+ * Stamp `prompt_cache_breakpoint` on the last input_text part of each anchor's
+ * user message item or function_call_output (string content becomes one
+ * input_text part). Copilot writes an entry at either; callers gate on
+ * isCopilotOrigin. Items are found by reference in the layout and replaced by
+ * copies, so the client's parsed input is never mutated.
  */
 export function withResponsesFoldAnchor<T>(
     items: T[],
     layout: readonly { original: unknown; coreId?: string; coreIds?: string[] }[],
-    anchorIds: string | undefined | readonly string[],
+    anchorIds: readonly string[],
 ): T[] {
-    const ids = anchorIds === undefined ? [] : typeof anchorIds === "string" ? [anchorIds] : anchorIds;
     if (knobNoCacheControl()) return items;
     let out = items;
-    for (const id of ids) out = stampResponsesAnchor(out, layout, id);
-    return out;
-}
-
-function stampResponsesAnchor<T>(
-    items: T[],
-    layout: readonly { original: unknown; coreId?: string; coreIds?: string[] }[],
-    anchorId: string,
-): T[] {
-    const slot = layout.find((s) => s.coreId === anchorId || s.coreIds?.includes(anchorId));
-    if (!slot) return items;
-    const index = items.indexOf(slot.original as T);
-    if (index < 0) return items;
-    const item = slot.original as { type?: string; role?: string; content?: unknown; output?: unknown };
-    // A tool result (function_call_output) takes the breakpoint on its output
-    // parts: Copilot GPT-6 Luna writes an entry there (probe, 2026-10-31).
-    // After folds the compress results cluster right after the developer
-    // block, so that is where most of the reusable prefix ends.
-    const isOutput = item.type === "function_call_output";
-    if (!isOutput && ((item.type !== undefined && item.type !== "message") || item.role !== "user")) return items;
-    const field = isOutput ? "output" : "content";
-    const value = item[field];
-    let content: Record<string, unknown>[];
-    if (typeof value === "string") {
-        content = [{ type: "input_text", text: value }];
-    } else if (Array.isArray(value)) {
-        content = value as Record<string, unknown>[];
-    } else {
-        return items;
+    for (const anchorId of anchorIds) {
+        const slot = layout.find((s) => s.coreId === anchorId || s.coreIds?.includes(anchorId));
+        const index = slot ? out.indexOf(slot.original as T) : -1;
+        if (index < 0) continue;
+        const item = slot!.original as { type?: string; role?: string; content?: unknown; output?: unknown };
+        const isOutput = item.type === "function_call_output";
+        if (!isOutput && ((item.type !== undefined && item.type !== "message") || item.role !== "user")) continue;
+        const field = isOutput ? "output" : "content";
+        const value = item[field];
+        const content = typeof value === "string" ? [{ type: "input_text", text: value }] : Array.isArray(value) ? (value as Record<string, unknown>[]) : undefined;
+        const last = content?.findLastIndex((part) => part?.type === "input_text") ?? -1;
+        if (last < 0 || content![last]!["prompt_cache_breakpoint"] !== undefined) continue;
+        out = [...out];
+        out[index] = { ...item, [field]: content!.map((part, i) => (i === last ? { ...part, prompt_cache_breakpoint: { mode: "explicit" } } : part)) } as T;
     }
-    let last = -1;
-    for (let i = content.length - 1; i >= 0; i--) {
-        if (content[i]?.type === "input_text") {
-            last = i;
-            break;
-        }
-    }
-    if (last < 0 || content[last]!["prompt_cache_breakpoint"] !== undefined) return items;
-    const out = [...items];
-    out[index] = { ...item, [field]: content.map((part, i) => (i === last ? { ...part, prompt_cache_breakpoint: RESPONSES_BREAKPOINT } : part)) } as T;
     return out;
 }

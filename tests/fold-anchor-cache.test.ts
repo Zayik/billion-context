@@ -127,39 +127,25 @@ test("responses fold anchor: explicit breakpoint on the last input_text of the a
     const other = { type: "message", role: "user", content: "tail" };
     const items = [anchorItem, other];
     const layout = [{ original: anchorItem, coreId: "u1" }, { original: other, coreId: "u2" }];
-    const out = withResponsesFoldAnchor(items, layout, "u1");
+    const out = withResponsesFoldAnchor(items, layout, ["u1"]);
     assert.notEqual(out, items);
     assert.deepEqual(out[0], { type: "message", role: "user", content: [{ type: "input_text", text: "first" }, { type: "input_image", image_url: "x" }, { type: "input_text", text: "last", prompt_cache_breakpoint: { mode: "explicit" } }] });
     assert.equal(out[1], other);
     assert.equal((anchorItem.content[2] as Record<string, unknown>)["prompt_cache_breakpoint"], undefined, "client item never mutated");
 });
 
-test("responses fold anchors: several items stamped in one pass", () => {
-    const a = { type: "message", role: "user", content: "a" };
-    const b = { type: "message", role: "user", content: "b" };
-    const c = { type: "message", role: "user", content: "c" };
-    const layout = [{ original: a, coreId: "u1" }, { original: b, coreId: "u2" }, { original: c, coreId: "u3" }];
-    const out = withResponsesFoldAnchor([a, b, c], layout, ["u3", "u1", "missing"]);
-    const bp = { mode: "explicit" };
-    assert.deepEqual(out, [
-        { type: "message", role: "user", content: [{ type: "input_text", text: "a", prompt_cache_breakpoint: bp }] },
-        b,
-        { type: "message", role: "user", content: [{ type: "input_text", text: "c", prompt_cache_breakpoint: bp }] },
-    ]);
-});
-
 test("responses fold anchor: string content becomes one input_text part", () => {
     const anchorItem = { role: "user", content: "hello" };
-    const out = withResponsesFoldAnchor([anchorItem], [{ original: anchorItem, coreIds: ["u1#p0", "u1#p1"], coreId: "u1#p0" }], "u1#p1");
+    const out = withResponsesFoldAnchor([anchorItem], [{ original: anchorItem, coreIds: ["u1#p0", "u1#p1"], coreId: "u1#p0" }], ["u1#p1"]);
     assert.deepEqual(out[0], { role: "user", content: [{ type: "input_text", text: "hello", prompt_cache_breakpoint: { mode: "explicit" } }] });
 });
 
-test("responses fold anchor: a tool result takes the breakpoint on its output", () => {
+test("responses fold anchors: several in one pass; a tool result takes it on its output", () => {
     const bp = { mode: "explicit" };
     const str = { type: "function_call_output", call_id: "c1", output: "summary text" };
     const arr = { type: "function_call_output", call_id: "c2", output: [{ type: "input_text", text: "one" }, { type: "input_image", image_url: "x" }] };
     const layout = [{ original: str, coreId: "t1" }, { original: arr, coreId: "t2" }];
-    const out = withResponsesFoldAnchor([str, arr], layout, ["t1", "t2"]);
+    const out = withResponsesFoldAnchor([str, arr], layout, ["t2", "missing", "t1"]);
     assert.deepEqual(out[0], { type: "function_call_output", call_id: "c1", output: [{ type: "input_text", text: "summary text", prompt_cache_breakpoint: bp }] });
     assert.deepEqual(out[1], { type: "function_call_output", call_id: "c2", output: [{ type: "input_text", text: "one", prompt_cache_breakpoint: bp }, { type: "input_image", image_url: "x" }] });
     assert.equal(typeof str.output, "string", "client item never mutated");
@@ -170,11 +156,11 @@ test("responses fold anchor: unchanged when the anchor is missing, rebuilt, or n
     const dev = { type: "message", role: "developer", content: "d" };
     const items = [user, dev];
     const layout = [{ original: user, coreId: "u1" }, { original: dev, coreId: "d1" }];
-    assert.equal(withResponsesFoldAnchor(items, layout, undefined), items);
-    assert.equal(withResponsesFoldAnchor(items, layout, "zz"), items);
-    assert.equal(withResponsesFoldAnchor(items, layout, "d1"), items);
+    assert.equal(withResponsesFoldAnchor(items, layout, []), items);
+    assert.equal(withResponsesFoldAnchor(items, layout, ["zz"]), items);
+    assert.equal(withResponsesFoldAnchor(items, layout, ["d1"]), items);
     // The slot was rebuilt (a different object rides the input): leave it.
-    assert.equal(withResponsesFoldAnchor([{ ...user }, dev], layout, "u1")[0]!.content, "hi");
+    assert.equal(withResponsesFoldAnchor([{ ...user }, dev], layout, ["u1"])[0]!.content, "hi");
 });
 
 test("isCopilotOrigin: only githubcopilot.com hosts", () => {

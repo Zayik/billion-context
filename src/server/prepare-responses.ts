@@ -415,9 +415,7 @@ reconcileFoldCoverage(session, msgs, { mode: foldMode, sessionId, log, markerStr
         }
         reapOrphansLogged(session, msgs, log, sessionId);
         rebuiltInput = patchResponsesInput(projection, processedMessages);
-        // Fold anchors (Copilot only): an explicit breakpoint on the last user
-        // item or tool result before each folded range (newest 40), so a later fold re-reads
-        // the prefix up to there instead of falling back to the developer block.
+        // Fold anchors (Copilot only): see foldAnchorMessageIds.
         if (Array.isArray(rebuiltInput) && isCopilotOrigin(upstreamOrigin)) {
             rebuiltInput = withResponsesFoldAnchor(rebuiltInput, projection.layout, foldAnchorMessageIds(originalMessages, processedMessages, turn.state.blocks, RESPONSES_FOLD_ANCHOR_LIMIT, (m) => m.role === "user" || m.contentType === "tool-result"));
         }
