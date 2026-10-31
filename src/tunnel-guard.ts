@@ -2,7 +2,7 @@ import { lookup } from "node:dns/promises";
 import { networkInterfaces } from "node:os";
 import { Worker } from "node:worker_threads";
 import { log as loggerLog } from "./logger.js";
-import { resolverWedgeRecord } from "./resolver-wedge.js";
+import { getResolverWedgeState, resolverWedgeRecord } from "./resolver-wedge.js";
 
 /**
  * Tunnel admission for the `/bili/<absolute-url>` zero-config branch (#409).
@@ -304,8 +304,15 @@ export async function checkTunnelDestination(origin: string, ctx: TunnelCheckCon
         // the worker stage, because the probe mitigates admission but does not heal the
         // pool (outbound connects still use it). resolvedOk semantics: the resolver
         // ANSWERED (an empty answer still proves reachability); only a thrown lookup is
-        // wedge evidence.
+        // wedge evidence. A worker-rescued admission therefore still counts as wedge
+        // evidence (#5326 coupling: without this the alarm goes silent in exactly the
+        // scenario it exists for).
         resolverWedgeRecord(host, resolved !== undefined);
+        if (resolved === undefined) {
+            // #5322: force an immediate eval so the warn log fires at the moment of
+            // tripping instead of on the next status poll.
+            getResolverWedgeState();
+        }
         let workerStageRan = false;
         // #5222: the main pool gave up — one fresh-pool probe before denying. A
         // long-lived process can wedge its own resolver state permanently
