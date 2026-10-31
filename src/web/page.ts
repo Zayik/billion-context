@@ -29,7 +29,6 @@ export function renderPage(origin: string, version: string, embed = false, theme
 <div id="update-banner" class="banner warn" hidden></div>
 <div id="stale-banner" class="banner warn" hidden></div>
 <div id="attribution-banner" class="banner warn" hidden></div>
-<div id="dns-wedge-banner" class="banner warn" hidden></div>
 <div id="storage-degraded-banner" class="banner warn" hidden></div>
 <div id="snapshot-shadow-banner" class="banner warn" hidden></div>
 <div id="storage-second-process-banner" class="banner warn" hidden></div>
