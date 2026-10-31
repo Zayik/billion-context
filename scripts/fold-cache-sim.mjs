@@ -130,15 +130,17 @@ const markable = (m) => m.role === "user" || m.role === "summary" || m.role === 
 
 const RESP = {
     none: () => [],
-    // PR #10: last markable visible message before each active fold, newest 40.
-    anchors: (msgs, ctx) => anchorIdx(msgs, ctx, 40),
+    // PR #10 as first opened: anchors on user messages only, newest 40.
+    "anchors(user)": (msgs, ctx) => anchorIdx(msgs, ctx, 40),
     // Sticky grid: mark a user/summary message when the gap since the previous
     // sticky marker reaches G tokens; markers persist until folded away.
     grid: (msgs, ctx, st) => gridIdx(msgs, ctx, st, ctx.gridTok),
-    "grid+anchors": (msgs, ctx, st) => cap([...gridIdx(msgs, ctx, st, ctx.gridTok), ...anchorIdx(msgs, ctx, 40)], msgs),
+    "grid+anchors(user)": (msgs, ctx, st) => cap([...gridIdx(msgs, ctx, st, ctx.gridTok), ...anchorIdx(msgs, ctx, 40)], msgs),
     // Every user message, sticky, newest 38 + first 2.
-    // What-if: breakpoints on tool results also write (so compress carriers are markable).
-    "anchors(tool-ok)": (msgs, ctx) => anchorIdx(msgs, ctx, 40, true),
+    // PR #10 now: anchors may sit on tool results too (Luna probe: they write).
+    anchors: (msgs, ctx) => anchorIdx(msgs, ctx, 40, true),
+    "grid+anchors": (msgs, ctx, st) => cap([...gridIdx(msgs, ctx, st, ctx.gridTok), ...anchorIdx(msgs, ctx, 40, true)], msgs),
+    "anchors(newest 3)": (msgs, ctx) => anchorIdx(msgs, ctx, 3, true),
     every: (msgs) => cap(msgs.map((m, i) => (i > 0 && markable(m) ? i : -1)).filter((i) => i >= 0), msgs),
 };
 
@@ -226,7 +228,7 @@ const ANTH = {
     pi: (msgs) => ({ marks: [0, msgs.length - 1], slots: 3 }),
     // PR #10: the free 4th slot on the newest fold anchor.
     "pi+anchor": (msgs, ctx) => ({ marks: [0, ...newestAnchor(msgs, ctx, 1), msgs.length - 1], slots: 4 }),
-    // Reclaim pi's tool mark: two anchors (newest two folds).
+    // Reclaim pi's tool mark (the system mark already covers the tools): two anchors.
     "reclaim:2anchors": (msgs, ctx) => ({ marks: [0, ...newestAnchor(msgs, ctx, 2), msgs.length - 1], slots: 4 }),
 };
 function newestAnchor(msgs, ctx, k) {
