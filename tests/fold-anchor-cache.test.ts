@@ -15,7 +15,7 @@ import { _resetPluginStateForTest } from "../src/plugin.ts";
 import { _setForTest as setRegistryForTest } from "../src/registry.ts";
 import { startServer } from "../src/server.ts";
 import { rmrf } from "./tmp-rm.ts";
-import { foldAnchorMessageId, isCopilotOrigin, withAnthropicFoldAnchor, withResponsesFoldAnchor } from "../src/loop/cache-control.ts";
+import { foldAnchorMessageId, foldAnchorMessageIds, isCopilotOrigin, withAnthropicFoldAnchor, withResponsesFoldAnchor } from "../src/loop/cache-control.ts";
 
 // Fold anchor: after a fold, every provider cache entry sits after the folded
 // range, so the next request re-reads only the system head. One breakpoint
@@ -55,6 +55,17 @@ test("fold anchor: the accept filter walks back to an allowed message", () => {
 test("fold anchor: a range at the very start has no anchor", () => {
     const original = msgs("u1", "a1", "u2");
     assert.equal(foldAnchorMessageId(original, msgs("u2"), [block(1, ["u1", "a1"])]), undefined);
+});
+
+test("fold anchors: one per active fold, newest first, deduplicated and capped", () => {
+    const original = msgs("u1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5");
+    // Three folds: a1 (oldest), u3..a3 (newest), u4 (middle, after the newest in position).
+    const blocks = [block(1, ["a1"]), block(3, ["u3", "a3"]), block(2, ["u4"]), block(4, ["x9"], false)];
+    const processed = msgs("u1", "u2", "a2", "a4", "u5");
+    assert.deepEqual(foldAnchorMessageIds(original, processed, blocks, 10), ["a2", "u1"], "u4's anchor is a2 too (u3..a3 hidden), so it dedups");
+    assert.deepEqual(foldAnchorMessageIds(original, processed, blocks, 1), ["a2"]);
+    assert.deepEqual(foldAnchorMessageIds(original, processed, blocks, 10, (m) => m.role === "user"), ["u2", "u1"]);
+    assert.deepEqual(foldAnchorMessageIds(original, processed, [], 10), []);
 });
 
 test("anthropic fold anchor: added within the 4-breakpoint budget, client marks kept", () => {
@@ -104,6 +115,20 @@ test("responses fold anchor: explicit breakpoint on the last input_text of the a
     assert.deepEqual(out[0], { type: "message", role: "user", content: [{ type: "input_text", text: "first" }, { type: "input_image", image_url: "x" }, { type: "input_text", text: "last", prompt_cache_breakpoint: { mode: "explicit" } }] });
     assert.equal(out[1], other);
     assert.equal((anchorItem.content[2] as Record<string, unknown>)["prompt_cache_breakpoint"], undefined, "client item never mutated");
+});
+
+test("responses fold anchors: several items stamped in one pass", () => {
+    const a = { type: "message", role: "user", content: "a" };
+    const b = { type: "message", role: "user", content: "b" };
+    const c = { type: "message", role: "user", content: "c" };
+    const layout = [{ original: a, coreId: "u1" }, { original: b, coreId: "u2" }, { original: c, coreId: "u3" }];
+    const out = withResponsesFoldAnchor([a, b, c], layout, ["u3", "u1", "missing"]);
+    const bp = { mode: "explicit" };
+    assert.deepEqual(out, [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "a", prompt_cache_breakpoint: bp }] },
+        b,
+        { type: "message", role: "user", content: [{ type: "input_text", text: "c", prompt_cache_breakpoint: bp }] },
+    ]);
 });
 
 test("responses fold anchor: string content becomes one input_text part", () => {

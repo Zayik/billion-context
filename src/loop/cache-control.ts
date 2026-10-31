@@ -93,42 +93,74 @@ export function stampAnthropicSystemCacheControl(systemOut: AnthropicRequestBody
 }
 
 /**
- * Fold anchor: one extra cache breakpoint that survives the next fold.
+ * Fold anchors: cache breakpoints that survive the next fold.
  *
  * A fold removes a range from the middle of the view. Every cache entry the
  * provider holds sits at a breakpoint the client placed earlier, and those
  * all sit after the folded range, so the request after a fold re-reads only
- * the system head and re-writes the rest. Folds move forward through the
- * history: the next one usually starts at or after the newest fold's range.
- * The last visible message before the newest folded range is therefore a
- * prefix that the next fold leaves byte-identical. A breakpoint there is
- * written once after each fold and read back after the next one.
+ * the system head and re-writes the rest. Folds mostly move forward through
+ * the history, so the last visible message before a folded range is a prefix
+ * that later folds leave byte-identical. A breakpoint there is written once
+ * after the fold and read back after later ones.
  *
- * Stateless: derived from the active blocks every request, so it moves only
- * when a new fold lands. Returns undefined when nothing has folded, or when
- * no visible message precedes the newest range.
+ * One anchor per active block, newest block first, deduplicated, at most
+ * `limit`. Anthropic has room for one (the newest); Copilot Terra keeps old
+ * breakpoints findable (first 2 + latest 50) and re-sending them is free, so
+ * it carries many, which also covers a fold that reaches back past the
+ * previous one. The breakpoint field is not part of the cached bytes, so an
+ * anchor that disappears (its block merged away) does not break the prefix.
+ *
+ * Stateless: derived from the active blocks every request.
  */
+export function foldAnchorMessageIds(
+    originalMessages: readonly { id?: string; role?: string }[],
+    processed: readonly { id?: string }[],
+    blocks: readonly { active: boolean; createdAt: number; effectiveMessageIds: readonly string[] }[],
+    limit: number,
+    accept: (message: { id?: string; role?: string }) => boolean = () => true,
+): string[] {
+    const active = blocks.filter((block) => block.active && block.effectiveMessageIds.length > 0);
+    if (active.length === 0 || limit <= 0) return [];
+    const blocksByBase = new Map<string, number[]>();
+    active.forEach((block, index) => {
+        for (const id of block.effectiveMessageIds) {
+            const base = baseIdOf(id);
+            const list = blocksByBase.get(base);
+            if (list) list.push(index);
+            else blocksByBase.set(base, [index]);
+        }
+    });
+    const visible = new Set(processed.map((m) => m.id).filter((id): id is string => typeof id === "string" && id.length > 0));
+    const anchorOf = new Map<number, string | undefined>();
+    let last: string | undefined;
+    for (const message of originalMessages) {
+        const id = message.id;
+        if (typeof id !== "string" || id.length === 0) continue;
+        for (const index of blocksByBase.get(baseIdOf(id)) ?? []) {
+            if (!anchorOf.has(index)) anchorOf.set(index, last);
+        }
+        if (visible.has(id) && accept(message)) last = id;
+    }
+    const order = active.map((block, index) => ({ createdAt: block.createdAt, index })).sort((a, b) => b.createdAt - a.createdAt || b.index - a.index);
+    const out: string[] = [];
+    for (const { index } of order) {
+        const anchor = anchorOf.get(index);
+        if (anchor !== undefined && !out.includes(anchor)) out.push(anchor);
+        if (out.length >= limit) break;
+    }
+    return out;
+}
+
+/** The newest fold's anchor alone (see foldAnchorMessageIds). */
 export function foldAnchorMessageId(
     originalMessages: readonly { id?: string; role?: string }[],
     processed: readonly { id?: string }[],
     blocks: readonly { active: boolean; createdAt: number; effectiveMessageIds: readonly string[] }[],
-    accept: (message: { id?: string; role?: string }) => boolean = () => true,
+    accept?: (message: { id?: string; role?: string }) => boolean,
 ): string | undefined {
-    let newest: (typeof blocks)[number] | undefined;
-    for (const block of blocks) {
-        if (block.active && block.effectiveMessageIds.length > 0 && (newest === undefined || block.createdAt >= newest.createdAt)) newest = block;
-    }
+    const newest = blocks.reduce<(typeof blocks)[number] | undefined>((best, block) => (block.active && block.effectiveMessageIds.length > 0 && (best === undefined || block.createdAt >= best.createdAt) ? block : best), undefined);
     if (newest === undefined) return undefined;
-    const covered = new Set(newest.effectiveMessageIds.map(baseIdOf));
-    const visible = new Set(processed.map((m) => m.id).filter((id): id is string => typeof id === "string" && id.length > 0));
-    let anchor: string | undefined;
-    for (const message of originalMessages) {
-        const id = message.id;
-        if (typeof id !== "string" || id.length === 0) continue;
-        if (covered.has(baseIdOf(id))) return anchor;
-        if (visible.has(id) && accept(message)) anchor = id;
-    }
-    return undefined;
+    return foldAnchorMessageIds(originalMessages, processed, [newest], 1, accept)[0];
 }
 
 const ANTHROPIC_BREAKPOINT_LIMIT = 4;
@@ -189,9 +221,14 @@ export function isCopilotOrigin(origin: string | undefined): boolean {
     }
 }
 
+/** Copilot Terra: how many fold anchors ride at once. The provider keeps the
+ *  latest 50 explicit breakpoints findable; 40 leaves headroom for the
+ *  client's own. */
+export const RESPONSES_FOLD_ANCHOR_LIMIT = 40;
+
 /**
  * Responses counterpart of withAnthropicFoldAnchor: stamp the explicit
- * breakpoint on the last input_text part of the anchor's user item. The item
+ * breakpoint on the last input_text part of each anchor's user item. The item
  * is found by reference (patchResponsesInput re-emits an unchanged slot's
  * original object), and replaced by a copy so the client's parsed input is
  * never mutated. Returns the input unchanged when the anchor is not a plain
@@ -200,9 +237,20 @@ export function isCopilotOrigin(origin: string | undefined): boolean {
 export function withResponsesFoldAnchor<T>(
     items: T[],
     layout: readonly { original: unknown; coreId?: string; coreIds?: string[] }[],
-    anchorId: string | undefined,
+    anchorIds: string | undefined | readonly string[],
 ): T[] {
-    if (knobNoCacheControl() || anchorId === undefined) return items;
+    const ids = anchorIds === undefined ? [] : typeof anchorIds === "string" ? [anchorIds] : anchorIds;
+    if (knobNoCacheControl()) return items;
+    let out = items;
+    for (const id of ids) out = stampResponsesAnchor(out, layout, id);
+    return out;
+}
+
+function stampResponsesAnchor<T>(
+    items: T[],
+    layout: readonly { original: unknown; coreId?: string; coreIds?: string[] }[],
+    anchorId: string,
+): T[] {
     const slot = layout.find((s) => s.coreId === anchorId || s.coreIds?.includes(anchorId));
     if (!slot) return items;
     const index = items.indexOf(slot.original as T);
