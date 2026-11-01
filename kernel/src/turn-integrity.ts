@@ -166,7 +166,7 @@ export interface IntegrityPre {
  *  least one signed thinking-family block. Rebuild merges each run into ONE
  *  provider message, so a partially folded run desynchronizes the signature
  *  from its context. Tool results (role "tool") break runs by construction. */
-function computeSignedRuns(messages: CoreMessage[]): string[][] {
+export function computeSignedRuns(messages: CoreMessage[]): string[][] {
   const signedRuns: string[][] = [];
   let i = 0;
   while (i < messages.length) {

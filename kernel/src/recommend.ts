@@ -34,7 +34,11 @@ import {
   lastUserAnchor,
 } from "./protected.js";
 import { countMessageTokens } from "./tokenize.js";
-import { computeIntegrityWithdrawals } from "./turn-integrity.js";
+import {
+  computeIntegrityWithdrawals,
+  computeSignedRuns,
+  isSignedThinkingFamily,
+} from "./turn-integrity.js";
 import { evaluateRefold } from "./refold.js";
 import { segmentGroups } from "./segment.js";
 import {
@@ -192,7 +196,53 @@ export function computeProtectedRefs(
     }
   }
 
+  releaseOrphanProtectedThinking(messages, state, result);
+
   return result;
+}
+
+/** Signed thinking follows its run. neverPreserveRecentTools drops read/bash
+ *  payloads from the recent window, so on a batched read loop Rule 2 walks back
+ *  over little but thinking messages and protects every one of them while
+ *  their calls and results stay foldable. The carve would then strip the
+ *  thinking from any fold, and INV3 (#4885) would rightly withdraw the whole
+ *  run as a partial split, leaving nothing advertised however large the
+ *  context grows. Thinking in a run with no other protected member therefore
+ *  leaves the zone and the run folds as one unit. Unsigned reasoning is
+ *  untouched (#564), a run whose call or prose is protected keeps its thinking,
+ *  and the latest run stays protected so an open tool loop keeps its signature. */
+function releaseOrphanProtectedThinking(
+  messages: CoreMessage[],
+  state: CompressionState,
+  protectedRefs: Set<string>,
+): void {
+  const runs = computeSignedRuns(messages);
+  if (runs.length === 0) return;
+  const byId = new Map<string, CoreMessage>();
+  let latestAssistantId: string | undefined;
+  for (const m of messages) {
+    if (m.id) byId.set(m.id, m);
+    if (m.role === "assistant") latestAssistantId = m.id;
+  }
+  for (const run of runs) {
+    if (latestAssistantId !== undefined && run.includes(latestAssistantId)) continue;
+    const thinkingRefs: string[] = [];
+    let hasOtherMember = false;
+    let otherProtected = false;
+    for (const id of run) {
+      const msg = byId.get(id);
+      const ref = state.messageRefs.byRaw[id];
+      if (!msg || !ref || ref === "BLOCKED") continue;
+      if (msg.contentType === "reasoning" || isSignedThinkingFamily(msg)) {
+        thinkingRefs.push(ref);
+      } else {
+        hasOtherMember = true;
+        if (protectedRefs.has(ref)) otherProtected = true;
+      }
+    }
+    if (!hasOtherMember || otherProtected) continue;
+    for (const ref of thinkingRefs) protectedRefs.delete(ref);
+  }
 }
 
 // ─── 2. Build Compressible + Protected Ranges ────────────────────────────────
