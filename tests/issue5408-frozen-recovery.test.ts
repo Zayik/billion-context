@@ -1,5 +1,5 @@
 /**
- * #5410: compression permanently fails for a session — frozen ingest watermark,
+ * #5408: compression permanently fails for a session — frozen ingest watermark,
  * requests no longer observed, and no warning until the host dies with
  * CONTEXT_WINDOW_EXCEEDED ~8h later (DSH native lane, v0.1.209).
  *
@@ -55,7 +55,7 @@ import { HOT_ATTACH_WINDOW_MS, noteColdLoad, noteRequest, _resetAttachHeartbeatF
 process.env.BILI_PERSIST_ZSTD = "0";
 // Same hermeticity pin as the #4323 suite: a developer machine with
 // storage.unified in its real config must not leak a tier into these tests.
-const HERMETIC = fs.mkdtempSync(path.join(os.tmpdir(), "bili-5410-hermetic-"));
+const HERMETIC = fs.mkdtempSync(path.join(os.tmpdir(), "bili-5408-hermetic-"));
 process.env.BILI_CONFIG_FILE = path.join(HERMETIC, "no-config.json");
 delete process.env.BILI_STORAGE_UNIFIED;
 
@@ -145,7 +145,7 @@ function tamperFirstRowBytes(dir: string, sessionId: string): string {
 // A. Freeze visibility: age stamp, details getter, ESCALATED carries diagnosis
 // ---------------------------------------------------------------------------
 
-test("#5410 A: escalation stamps the freeze age, details ride the getters, and the ESCALATED warn carries the field-level diagnosis", () => {
+test("#5408 A: escalation stamps the freeze age, details ride the getters, and the ESCALATED warn carries the field-level diagnosis", () => {
     const dir = tmpDir("freeze-vis");
     try {
         const { shadow, store } = openShadow(dir);
@@ -167,13 +167,13 @@ test("#5410 A: escalation stamps the freeze age, details ride the getters, and t
                 assert.equal(stats(shadow).verifyDrift, 3);
                 assert.equal(shadow.envelopeFrozen(ids), true, "three consecutive sampled drifts freeze the envelope");
 
-                // #5410: the freeze carries WHEN and rides the detail getters.
+                // #5408: the freeze carries WHEN and rides the detail getters.
                 const info = shadow.envelopeFrozenInfo(ids);
                 assert.ok(info, "envelopeFrozenInfo reports the freeze");
                 assert.ok(info!.sinceMs > Date.now() - 120_000 && info!.sinceMs <= Date.now(), `stamp is recent: ${info!.sinceMs}`);
                 assert.deepEqual(shadow.frozenEnvelopeDetails(), [{ id: ids, sinceMs: info!.sinceMs }], "details list the frozen session with its stamp");
 
-                // #5410: the ESCALATED warn (the line operators grep for) now
+                // #5408: the ESCALATED warn (the line operators grep for) now
                 // carries the field-level diagnosis instead of bare counts.
                 const escalated = captured.filter((e) => e.level === "warn" && e.msg.includes(`DIGEST DRIFT ESCALATED for ${ids}`));
                 assert.equal(escalated.length, 1, "exactly ONE escalation alarm for the whole streak");
@@ -243,7 +243,7 @@ function latchDrift(shadow: UnifiedShadow, id: string): void {
     sh.driftedSessions.add(id);
 }
 
-test("#5410 B1: a drift-latched folded save sweeps the foreign row out of the index", () => {
+test("#5408 B1: a drift-latched folded save sweeps the foreign row out of the index", () => {
     const dir = tmpDir("b1-latched");
     try {
         const { shadow, store } = openShadow(dir);
@@ -266,7 +266,7 @@ test("#5410 B1: a drift-latched folded save sweeps the foreign row out of the in
     }
 });
 
-test("#5410 B1 negative gate: an UNLATCHED folded save leaves foreign rows untouched", () => {
+test("#5408 B1 negative gate: an UNLATCHED folded save leaves foreign rows untouched", () => {
     const dir = tmpDir("b1-control");
     try {
         const { shadow, store } = openShadow(dir);
@@ -293,7 +293,7 @@ test("#5410 B1 negative gate: an UNLATCHED folded save leaves foreign rows untou
 // B2. State sub-key drill-down in the drift diagnosis
 // ---------------------------------------------------------------------------
 
-test("#5410 B2: describeViewDivergence drills state sub-keys so 'diverged: state' becomes actionable", () => {
+test("#5408 B2: describeViewDivergence drills state sub-keys so 'diverged: state' becomes actionable", () => {
     const base = {
         id: "x",
         state: { nextBlockId: 1, tokenSnapshot: { a: 1 }, messageRefs: { byRaw: {}, byRef: {} } },
@@ -318,7 +318,7 @@ test("#5410 B2: describeViewDivergence drills state sub-keys so 'diverged: state
 // C. Post-attach observation heartbeat
 // ---------------------------------------------------------------------------
 
-test("#5410 C: hot-at-attach silence alarms once; a request disarms; stale or unsaved loads stay quiet", async () => {
+test("#5408 C: hot-at-attach silence alarms once; a request disarms; stale or unsaved loads stay quiet", async () => {
     const { captured, stop } = captureLogs();
     try {
         _resetAttachHeartbeatForTest(60);
@@ -329,7 +329,7 @@ test("#5410 C: hot-at-attach silence alarms once; a request disarms; stale or un
         const fired = captured.filter((e) => e.level === "error" && e.msg.startsWith("[attach] hb-fire"));
         assert.equal(fired.length, 1, "one alarm for the silent hot attach");
         assert.ok(fired[0].msg.includes("NO model request was observed"), fired[0].msg);
-        assert.ok(fired[0].msg.includes("#5410"), fired[0].msg);
+        assert.ok(fired[0].msg.includes("#5408"), fired[0].msg);
 
         // Disarm: traffic resumed before the timer.
         noteColdLoad("hb-disarm", "unit-test", Date.now() - 1_000);
@@ -396,7 +396,7 @@ function makeSession(id: string, requests: number, blocks: CompressionBlock[]): 
     } as unknown as Session;
 }
 
-test("#5410 A2: frozen skip-saves log exactly ONE rate-limited error per cooldown, and the status wire carries the details", async () => {
+test("#5408 A2: frozen skip-saves log exactly ONE rate-limited error per cooldown, and the status wire carries the details", async () => {
     _resetStorageRuntimeStatusForTest();
     process.env.BILI_STORAGE_UNIFIED = "full";
     const dir = tmpDir("skiplog");
@@ -431,7 +431,7 @@ test("#5410 A2: frozen skip-saves log exactly ONE rate-limited error per cooldow
             stop();
         }
 
-        const skips = captured.filter((e) => e.level === "error" && e.msg.includes("skipping") && e.msg.includes("envelope save") && e.msg.includes("#5410"));
+        const skips = captured.filter((e) => e.level === "error" && e.msg.includes("skipping") && e.msg.includes("envelope save") && e.msg.includes("#5408"));
         assert.equal(skips.length, 1, "three frozen saves inside one cooldown log exactly ONE error");
         assert.ok(skips[0].msg.includes("scheduled"), `first route named: ${skips[0].msg}`);
         assert.ok(skips[0].msg.includes("FROZEN since"), `freeze age surfaced: ${skips[0].msg}`);
@@ -445,7 +445,7 @@ test("#5410 A2: frozen skip-saves log exactly ONE rate-limited error per cooldow
     }
 });
 
-test("#5410 D1: a stale cold-load warns only when the session had compressions AND the view is old", () => {
+test("#5408 D1: a stale cold-load warns only when the session had compressions AND the view is old", () => {
     process.env.BILI_STORAGE_UNIFIED = "full";
     const dir = tmpDir("stale-load");
     try {
@@ -465,7 +465,7 @@ test("#5410 D1: a stale cold-load warns only when the session had compressions A
             stop();
         }
 
-        const warns = captured.filter((e) => e.level === "warn" && e.msg.includes("cold-loaded view is ~") && e.msg.includes("#5410"));
+        const warns = captured.filter((e) => e.level === "warn" && e.msg.includes("cold-loaded view is ~") && e.msg.includes("#5408"));
         assert.equal(warns.length, 1, "only the old-with-compressions load warns");
         assert.ok(warns[0].msg.includes("stale-c"), warns[0].msg);
         assert.ok(!captured.some((e) => e.msg.includes("fresh-c") && e.msg.includes("cold-loaded view is ~")), "recent view stays quiet");
