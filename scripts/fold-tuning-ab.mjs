@@ -9,6 +9,12 @@
 //   node scripts/fold-tuning-ab.mjs [--run] [--cap 15] [--run-cap 3]
 //       [--arms baseline,tail,tail75] [--models claude-haiku-5.5,gpt-6-luna]
 //       [--provider github-copilot] [--reps 2] [--modules 32] [--keep]
+//       [--extension <path to billion-context dist/agent/pi-native.js>]
+//
+// --extension loads the plugin for these sessions only (pi -e), so a build of the fork
+// can be measured without touching the global pi setup. A session that shows no sign
+// of the plugin (no compress call and an empty bili sessions dir) is marked invalid,
+// and the run stops after it, since its numbers would be plain pi.
 //
 // Project rule: cheap models only (Haiku 5.5, GPT-6 Luna). Never Terra or Opus.
 //
@@ -47,6 +53,11 @@ const PROVIDER = flag("--provider", "github-copilot");
 const MODELS = flag("--models", "claude-haiku-5.5,gpt-6-luna").split(",").filter(Boolean);
 const ARM_NAMES = flag("--arms", "baseline,tail,tail75").split(",").filter(Boolean);
 const PI = flag("--pi", process.env.PI_BIN ?? "pi");
+const EXTENSION = flag("--extension", undefined);
+if (EXTENSION && !fs.existsSync(EXTENSION)) {
+    console.error(`--extension not found: ${EXTENSION} (build the checkout first)`);
+    process.exit(2);
+}
 const OUT = flag("--out", path.join(os.homedir(), ".cache", "billion-context", "fold-tuning-ab"));
 
 const BANNED = /terra|opus/i;
@@ -192,7 +203,8 @@ function runSession({ arm, model, rep, root }) {
     fs.mkdirSync(sessions, { recursive: true });
 
     const env = { ...process.env, BILI_CONFIG_FILE: cfgFile, BILI_SESSIONS_DIR: sessions };
-    const piArgs = ["--mode", "json", "--no-session", "--provider", PROVIDER, "--model", model, "--no-context-files", TASK(MODULES)];
+    const piArgs = ["--mode", "json", "--no-session", "--provider", PROVIDER, "--model", model, "--no-context-files",
+        ...(EXTENSION ? ["-e", path.resolve(EXTENSION)] : []), TASK(MODULES)];
     const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, killed: false, started: Date.now() };
     const seen = new Set();
 
@@ -244,6 +256,7 @@ function runSession({ arm, model, rep, root }) {
             m.testsPass = pass;
             m.testsFail = fail;
             m.minutes = +((Date.now() - m.started) / 60000).toFixed(1);
+            m.pluginSeen = m.compress > 0 || fs.readdirSync(sessions, { recursive: true }).length > 0;
             delete m.started;
             if (!KEEP) fs.rmSync(work, { recursive: true, force: true });
             resolve(m);
@@ -268,6 +281,7 @@ const per = estimate();
 console.log(`fold-tuning A/B: ${plan.length} sessions (${ARM_NAMES.join("/")} x ${MODELS.join("/")} x ${REPS} reps), ${MODULES} modules`);
 console.log(`rough estimate ~$${per.toFixed(2)} per session, ~$${(per * plan.length).toFixed(2)} total; cap $${CAP}, per-session cap $${RUN_CAP}`);
 console.log(`base config: ${baseConfigPath()}`);
+console.log(`plugin: ${EXTENSION ? `pi -e ${path.resolve(EXTENSION)}` : "whatever pi has installed"}`);
 for (const a of ARM_NAMES) console.log(`  ${a}: compress ${JSON.stringify(ARMS[a])}`);
 
 if (!RUN) {
@@ -297,6 +311,11 @@ for (const p of plan) {
     total += m.cost;
     results.push(m);
     fs.appendFileSync(resultsFile, JSON.stringify(m) + "\n");
+    if (!m.pluginSeen) {
+        console.log(`  INVALID: no sign the billion-context plugin loaded (0 compress calls, empty sessions dir). Stopping.`);
+        console.log(`  $${m.cost.toFixed(3)} spent on a plain pi session`);
+        break;
+    }
     console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} rereads ${m.rereads} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.killed ? " (killed)" : ""}`);
 }
 
