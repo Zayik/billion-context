@@ -272,11 +272,17 @@ function runSession({ arm, model, rep, root }) {
     const sessions = path.join(root, `${arm}-${model}-${rep}.bili-sessions`);
     fs.mkdirSync(sessions, { recursive: true });
 
-    const env = { ...process.env, BILI_CONFIG_FILE: cfgFile, BILI_SESSIONS_DIR: sessions };
+    // Own state dir per session: bili's proxy registry and bili.log live there, so a
+    // proxy left over from the previous session is never found and attached to (it
+    // would carry the previous arm's config), and the log is this session's alone.
+    const state = path.join(root, `${arm}-${model}-${rep}.state`);
+    fs.mkdirSync(state, { recursive: true });
+    const env = { ...process.env, BILI_CONFIG_FILE: cfgFile, BILI_SESSIONS_DIR: sessions, XDG_STATE_HOME: state };
     const piArgs = ["--mode", "json", "--no-session", "--provider", PROVIDER, "--model", model, "--no-context-files",
         ...(EXTENSION ? ["-e", path.resolve(EXTENSION)] : []), TASK(MODULES)];
     const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, recoveryCmds: 0, reportPeek: false, killed: false, started: Date.now() };
     const seen = new Set();
+    let summaries = "";
     const lastMod = `mod_${pad(MODULES)}.js`;
     const touch = (name) => {
         if (/^mod_\d+\.js$/.test(name)) {
@@ -316,14 +322,17 @@ function runSession({ arm, model, rep, root }) {
                     }
                 }
                 if (ev.type === "tool_execution_start") {
-                    if (/compress/i.test(ev.toolName)) m.compress++;
+                    if (/compress/i.test(ev.toolName)) {
+                        m.compress++;
+                        summaries += JSON.stringify(ev.args ?? {}) + "\n";
+                    }
                     if (ev.toolName === "read") {
                         m.reads++;
                         touch(path.basename(String(ev.args?.path ?? ev.args?.file_path ?? "").replace(/\\/g, "/")));
                     } else if (ev.toolName === "bash") {
                         const cmd = String(ev.args?.command ?? "");
                         const names = bashTargets(cmd);
-                        if (names.length && seen.has(lastMod)) m.recoveryCmds++;
+                        if (names.some((n) => n.startsWith("mod_")) && seen.has(lastMod)) m.recoveryCmds++;
                         for (const name of names) touch(name);
                     }
                 }
@@ -338,7 +347,29 @@ function runSession({ arm, model, rep, root }) {
             m.testsPass = pass;
             m.testsFail = fail;
             m.minutes = +((Date.now() - m.started) / 60000).toFixed(1);
-            m.pluginSeen = m.compress > 0 || fs.readdirSync(sessions, { recursive: true }).length > 0;
+            // Validity: this session's own sessions dir has data, its own bili.log exists,
+            // and the logged nudge interval matches the arm (proves its config was used).
+            const logFile = path.join(state, "billion-context", "bili.log");
+            const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "";
+            // How many of the 16 values the report needs survived in the fold summaries.
+            const needed = reportTasks(MODULES).flatMap((t) => [spec(t.a)[t.fa], spec(t.b)[t.fb]]);
+            m.keptValues = needed.filter((v) => summaries.includes(String(v))).length;
+            m.nudgeInject = (logText.match(/nudge INJECT/g) ?? []).length;
+            m.nudgeSuppressed = (logText.match(/ARMED-SUPPRESSED/g) ?? []).length;
+            const intervals = [...new Set([...logText.matchAll(/interval=(\d+)/g)].map((x) => Number(x[1])))];
+            m.interval = intervals.join("/") || null;
+            const wantInterval = ARMS[arm].nudgeGrowthTokens ?? 50000;
+            m.ownSessions = fs.readdirSync(sessions, { recursive: true }).length > 0;
+            m.pluginSeen = m.ownSessions && logText.length > 0 && (intervals.length === 0 || intervals.every((v) => v === wantInterval));
+            m.invalidReason = m.pluginSeen ? null : !m.ownSessions ? "own sessions dir empty (attached to another proxy?)" : !logText ? "no bili.log in this session's state dir" : `interval ${m.interval} != ${wantInterval}`;
+            // Stop the proxy this session spawned so it cannot linger into the next one.
+            const reg = path.join(state, "billion-context", "instances");
+            if (fs.existsSync(reg)) for (const f of fs.readdirSync(reg)) {
+                try {
+                    const pid = JSON.parse(fs.readFileSync(path.join(reg, f), "utf8")).pid;
+                    if (pid && pid !== process.pid) process.kill(pid);
+                } catch { /* already gone */ }
+            }
             delete m.started;
             if (!KEEP) fs.rmSync(work, { recursive: true, force: true });
             resolve(m);
@@ -395,20 +426,20 @@ for (const p of plan) {
     results.push(m);
     fs.appendFileSync(resultsFile, JSON.stringify(m) + "\n");
     if (!m.pluginSeen) {
-        console.log(`  INVALID: no sign the billion-context plugin loaded (0 compress calls, empty sessions dir). Stopping.`);
+        console.log(`  INVALID: ${m.invalidReason}. Stopping: this session did not run with its arm's config.`);
         console.log(`  $${m.cost.toFixed(3)} spent on a plain pi session`);
         break;
     }
-    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} rereads ${m.rereads} recovery ${m.recoveryCmds} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
+    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} kept ${m.keptValues}/16 rereads ${m.rereads} recovery ${m.recoveryCmds} nudges ${m.nudgeInject} interval ${m.interval} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
     if (p.arm === "canary") console.log("  canary: injectNudge is off, so bili.log should show ARMED-SUPPRESSED and no nudge INJECT for this session. compress can still run: the pi lane always registers the tool, so injectTool does not apply there.");
 }
 
 console.log(`\nsummary (spent $${total.toFixed(2)}), means per arm x model:`);
-console.log("arm      model               cost    cacheRead  cacheWrite  output  compress  rereads  recovery  tests");
+console.log("arm      model               cost    cacheRead  cacheWrite  output  compress  kept/16  rereads  recovery  tests");
 for (const model of MODELS) for (const arm of ARM_NAMES) {
     const rs = results.filter((r) => r.arm === arm && r.model === model);
     if (!rs.length) continue;
     const avg = (k) => rs.reduce((s, r) => s + r[k], 0) / rs.length;
-    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("rereads").toFixed(1).padStart(8)} ${avg("recoveryCmds").toFixed(1).padStart(9)}  ${avg("testsPass").toFixed(1)}/9`);
+    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("keptValues").toFixed(1).padStart(8)} ${avg("rereads").toFixed(1).padStart(8)} ${avg("recoveryCmds").toFixed(1).padStart(9)}  ${avg("testsPass").toFixed(1)}/9`);
 }
 console.log(`results: ${resultsFile}`);
