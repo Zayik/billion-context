@@ -10,6 +10,11 @@
 //       [--arms baseline,tail,tail75] [--models claude-haiku-5.5,gpt-6-luna]
 //       [--provider github-copilot] [--reps 2] [--modules 32] [--keep]
 //       [--extension <path to billion-context dist/agent/pi-native.js>]
+//       [--pi-cli <path to pi's dist/bundle/cli.js>]
+//
+// --pi-cli runs pi's CLI through node with no shell. Required on Windows, where pi is a
+// .ps1/.cmd shim and a shell launch splits the multi-line prompt into words (and makes
+// the per-session kill unreliable). Set PI_MANAGED_INSTALL_ROOT if pi's shim does.
 //
 // --extension loads the plugin for these sessions only (pi -e), so a build of the fork
 // can be measured without touching the global pi setup. A session that shows no sign
@@ -22,16 +27,19 @@
 //   baseline  upstream defaults (50k step, 3 messages / 5k tokens tail, read/bash unprotected)
 //   tail      preserveRecentTools ["read"] + preserveRecentTokens 20000
 //   tail75    tail + nudgeGrowthTokens 75000
+//   canary    injectTool/injectNudge off: run once to prove the per-arm config file is
+//             honoured (expect 0 compress calls); not in the default arm list
 //
-// Fixture: N generated modules (~3.5k tokens each), each exporting one SPEC constant,
-// plus src/report.js with six stubs whose doc comments need SPEC values from early
-// modules, copied inline (no imports allowed). The task reads every module first, so
-// the early ones get folded before the stubs are written. Quality = tests passing
-// and whether values were recovered by re-reading or from memory/summary.
+// Fixture: N generated modules (~3.5k tokens each), each exporting an 8-field CONFIG
+// table, plus src/report.js with eight stubs that each need two fields from the first
+// ~12 modules, written inline. The task does not say which fields matter, report.js
+// must not be opened until every module is read, and the expected values live outside
+// the workspace, so the answer depends on what folding kept or on re-reading.
 //
 // Per session it records: billed tokens (input, cache read, cache write, output),
-// pi-reported cost, turns, compress calls, reads, re-reads of an already-read path,
-// and node --test pass/fail counts. Results go to --out as JSONL plus a summary.
+// pi-reported cost, turns, compress calls, reads, re-reads of an already-read module
+// (read tool or a bash command naming it), whether report.js was opened early, and
+// how many of the 9 hidden tests pass. Results go to --out as JSONL plus a summary.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -53,6 +61,15 @@ const PROVIDER = flag("--provider", "github-copilot");
 const MODELS = flag("--models", "claude-haiku-5.5,gpt-6-luna").split(",").filter(Boolean);
 const ARM_NAMES = flag("--arms", "baseline,tail,tail75").split(",").filter(Boolean);
 const PI = flag("--pi", process.env.PI_BIN ?? "pi");
+const PI_CLI = flag("--pi-cli", undefined);
+if (PI_CLI && !fs.existsSync(PI_CLI)) {
+    console.error(`--pi-cli not found: ${PI_CLI}`);
+    process.exit(2);
+}
+if (!PI_CLI && process.platform === "win32" && args.includes("--run")) {
+    console.error("on Windows pass --pi-cli <pi dist/bundle/cli.js>: a shell launch mangles the prompt");
+    process.exit(2);
+}
 const EXTENSION = flag("--extension", undefined);
 if (EXTENSION && !fs.existsSync(EXTENSION)) {
     console.error(`--extension not found: ${EXTENSION} (build the checkout first)`);
@@ -72,6 +89,7 @@ const ARMS = {
     baseline: {},
     tail: { preserveRecentTools: ["read"], preserveRecentTokens: 20000 },
     tail75: { preserveRecentTools: ["read"], preserveRecentTokens: 20000, nudgeGrowthTokens: 75000 },
+    canary: { injectTool: false, injectNudge: false },
 };
 for (const a of ARM_NAMES) {
     if (!ARMS[a]) {
@@ -80,7 +98,8 @@ for (const a of ARM_NAMES) {
     }
 }
 
-// Rough per-million prices for the dry-run estimate only; the live cap uses pi's own cost.
+// Rough per-million prices for the dry-run estimate only (an upper bound: the 2026-11-01
+// Luna pilot cost $0.07 per session against a $1.19 estimate); the live cap uses pi's own cost.
 const EST = { in: 1, read: 0.1, write: 1.25, out: 5 };
 
 // ─── fixture ──────────────────────────────────────────────────────────────────
@@ -102,19 +121,30 @@ function rng(seed) {
 
 const pad = (n) => String(n).padStart(2, "0");
 
+// Each module carries an 8-field CONFIG table. Nothing in the task says which fields
+// matter, and report.js plus the expected values stay hidden until all reads are done,
+// so recovering a value depends on what folding kept (or on re-reading the module).
 function spec(i) {
     const r = rng(1000 + i);
     const w = () => WORDS[Math.floor(r() * WORDS.length)];
-    return { code: `${w()}-${100 + Math.floor(r() * 900)}`, factor: 2 + Math.floor(r() * 97), region: w() };
+    return {
+        code: `${w()}-${100 + Math.floor(r() * 900)}`,
+        factor: 2 + Math.floor(r() * 97),
+        region: w(),
+        limit: 100 + Math.floor(r() * 9900),
+        ratio: Math.round(r() * 10000) / 100,
+        owner: w(),
+        tier: 1 + Math.floor(r() * 5),
+        salt: Math.floor(r() * 0xffffff).toString(16).padStart(6, "0"),
+    };
 }
 
 function moduleSource(i, targetChars = 14000) {
     const r = rng(i);
     const w = () => WORDS[Math.floor(r() * WORDS.length)];
     const s = spec(i);
-    let out = `// mod_${pad(i)}: ${w()} ${w()} pipeline stage.\n` +
-        `// SPEC_${pad(i)} is the only value other code depends on.\n\n` +
-        `export const SPEC_${pad(i)} = ${JSON.stringify(s)};\n\n`;
+    let out = `// mod_${pad(i)}: ${w()} ${w()} pipeline stage.\n\n` +
+        `export const CONFIG_${pad(i)} = ${JSON.stringify(s, null, 4)};\n\n`;
     let f = 0;
     while (out.length < targetChars) {
         const name = `${w()}${w()[0].toUpperCase()}${w().slice(1)}${f++}`;
@@ -131,43 +161,53 @@ function moduleSource(i, targetChars = 14000) {
     return out;
 }
 
-// Six stubs, each needing values from early modules (folded by the time they are written).
+// Eight stubs over fields of the first ~12 modules (folded by the time they are written).
+const FIELDS = ["code", "factor", "region", "limit", "ratio", "owner", "tier", "salt"];
 function reportTasks(n) {
-    const pick = (a, b) => [1 + (a % Math.min(8, n)), 1 + ((b * 3) % Math.min(12, n))];
-    return [
-        { fn: "alpha", mods: pick(0, 1), expr: (x, y) => x.factor * y.factor, text: "SPEC_A.factor * SPEC_B.factor" },
-        { fn: "beta", mods: pick(2, 2), expr: (x, y) => `${x.code}/${y.region}`, text: "SPEC_A.code + \"/\" + SPEC_B.region" },
-        { fn: "gamma", mods: pick(4, 3), expr: (x, y) => x.factor + y.code.length, text: "SPEC_A.factor + SPEC_B.code.length" },
-        { fn: "delta", mods: pick(5, 4), expr: (x, y) => `${y.region}:${x.factor}`, text: "SPEC_B.region + \":\" + SPEC_A.factor" },
-        { fn: "epsilon", mods: pick(6, 5), expr: (x, y) => x.factor - y.factor, text: "SPEC_A.factor - SPEC_B.factor" },
-        { fn: "zeta", mods: pick(7, 6), expr: (x, y) => `${x.region}${y.code}`, text: "SPEC_A.region + SPEC_B.code" },
-    ];
+    const r = rng(4242);
+    const span = Math.min(12, n);
+    const out = [];
+    for (let k = 0; k < 8; k++) {
+        const a = 1 + Math.floor(r() * span);
+        let b = 1 + Math.floor(r() * span);
+        if (b === a) b = 1 + (b % span);
+        const fa = FIELDS[Math.floor(r() * FIELDS.length)];
+        const fb = FIELDS[Math.floor(r() * FIELDS.length)];
+        out.push({
+            fn: `part${k + 1}`,
+            a, b, fa, fb,
+            text: `CONFIG_${pad(a)}.${fa} and CONFIG_${pad(b)}.${fb}, as a two-element array [${fa}, ${fb}]`,
+            expected: [spec(a)[fa], spec(b)[fb]],
+        });
+    }
+    return out;
 }
 
-function writeFixture(dir, n) {
+// Tests live outside the workspace so the agent cannot read the expected values.
+function writeFixture(dir, n, testFile) {
     fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-    fs.mkdirSync(path.join(dir, "test"), { recursive: true });
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fold-fixture", type: "module", private: true }, null, 2));
     for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, "src", `mod_${pad(i)}.js`), moduleSource(i));
     const tasks = reportTasks(n);
-    let report = "// Build rule: this file must not import anything. Copy the SPEC values inline.\n\n";
-    let test = 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport fs from "node:fs";\nimport * as r from "../src/report.js";\n\n' +
-        'test("report.js has no imports", () => {\n    assert.doesNotMatch(fs.readFileSync(new URL("../src/report.js", import.meta.url), "utf8"), /^\\s*import\\b|require\\(/m);\n});\n\n';
+    let report = "// Build rule: this file must not import anything. Write the values inline.\n\n";
+    const reportUrl = new URL(`file://${path.resolve(dir, "src", "report.js").replace(/\\/g, "/").replace(/^([A-Za-z]):/, "/$1:")}`).href;
+    let test = 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport fs from "node:fs";\n' +
+        `const url = ${JSON.stringify(reportUrl)};\nconst r = await import(url);\n\n` +
+        'test("report.js has no imports", () => {\n    assert.doesNotMatch(fs.readFileSync(new URL(url), "utf8"), /^\\s*import\\b|require\\(/m);\n});\n\n';
     for (const t of tasks) {
-        const [a, b] = t.mods;
-        report += `/** Return ${t.text.replaceAll("SPEC_A", `SPEC_${pad(a)}`).replaceAll("SPEC_B", `SPEC_${pad(b)}`)} (from src/mod_${pad(a)}.js and src/mod_${pad(b)}.js). */\n` +
+        report += `/** Return ${t.text} (see src/mod_${pad(t.a)}.js and src/mod_${pad(t.b)}.js). */\n` +
             `export function ${t.fn}() {\n    throw new Error("TODO");\n}\n\n`;
-        test += `test("${t.fn}", () => {\n    assert.deepEqual(r.${t.fn}(), ${JSON.stringify(t.expr(spec(a), spec(b)))});\n});\n\n`;
+        test += `test("${t.fn}", () => {\n    assert.deepEqual(r.${t.fn}(), ${JSON.stringify(t.expected)});\n});\n\n`;
     }
     fs.writeFileSync(path.join(dir, "src", "report.js"), report);
-    fs.writeFileSync(path.join(dir, "test", "report.test.js"), test);
+    fs.writeFileSync(testFile, test);
 }
 
 const TASK = (n) =>
     `This repo has src/mod_01.js through src/mod_${pad(n)}.js and src/report.js.\n` +
-    `Step 1: read every module from mod_01 to mod_${pad(n)} in order, one file per read call, and after each read append one line to NOTES.md describing that module and its SPEC value.\n` +
-    `Step 2: implement the six functions in src/report.js exactly as their doc comments say. Do not add imports; write the values inline. Re-read files only if you need to.\n` +
-    `Step 3: run \`node --test\` and fix report.js until all tests pass, then stop.`;
+    `Step 1: read every module from mod_01 to mod_${pad(n)} in order, one file per read call, to learn the codebase. Do not open src/report.js until you have read all of them.\n` +
+    `Step 2: open src/report.js and implement every function exactly as its doc comment says. Do not add imports; write the values inline. Re-read files only if you need to.\n` +
+    `Step 3: check your values, then stop. There is no test suite in this repo.`;
 
 // ─── config per arm ───────────────────────────────────────────────────────────
 
@@ -196,7 +236,8 @@ function armConfig(arm) {
 
 function runSession({ arm, model, rep, root }) {
     const work = path.join(root, `${arm}-${model}-${rep}`);
-    writeFixture(work, MODULES);
+    const testFile = path.join(root, `${arm}-${model}-${rep}.hidden.test.mjs`);
+    writeFixture(work, MODULES, testFile);
     const cfgFile = path.join(root, `${arm}-${model}-${rep}.config.json`);
     fs.writeFileSync(cfgFile, JSON.stringify(armConfig(arm), null, 2));
     const sessions = path.join(root, `${arm}-${model}-${rep}.bili-sessions`);
@@ -205,11 +246,20 @@ function runSession({ arm, model, rep, root }) {
     const env = { ...process.env, BILI_CONFIG_FILE: cfgFile, BILI_SESSIONS_DIR: sessions };
     const piArgs = ["--mode", "json", "--no-session", "--provider", PROVIDER, "--model", model, "--no-context-files",
         ...(EXTENSION ? ["-e", path.resolve(EXTENSION)] : []), TASK(MODULES)];
-    const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, killed: false, started: Date.now() };
+    const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, reportPeek: false, killed: false, started: Date.now() };
     const seen = new Set();
+    const lastMod = `mod_${pad(MODULES)}.js`;
+    const touch = (name) => {
+        if (/^mod_\d+\.js$/.test(name)) {
+            if (seen.has(name)) m.rereads++;
+            seen.add(name);
+        } else if (name === "report.js" && !seen.has(lastMod)) m.reportPeek = true;
+    };
 
     return new Promise((resolve) => {
-        const child = spawn(PI, piArgs, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+        const child = PI_CLI
+            ? spawn(process.execPath, [path.resolve(PI_CLI), ...piArgs], { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] })
+            : spawn(PI, piArgs, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] });
         let buf = "";
         const log = fs.createWriteStream(path.join(root, `${arm}-${model}-${rep}.events.jsonl`));
         child.stdout.on("data", (chunk) => {
@@ -239,10 +289,11 @@ function runSession({ arm, model, rep, root }) {
                 if (ev.type === "tool_execution_start") {
                     if (/compress/i.test(ev.toolName)) m.compress++;
                     if (ev.toolName === "read") {
-                        const p = path.normalize(String(ev.args?.path ?? ev.args?.file_path ?? ""));
                         m.reads++;
-                        if (seen.has(p)) m.rereads++;
-                        seen.add(p);
+                        touch(path.basename(String(ev.args?.path ?? ev.args?.file_path ?? "").replace(/\\/g, "/")));
+                    } else if (ev.toolName === "bash") {
+                        const cmd = String(ev.args?.command ?? "");
+                        for (const name of new Set(cmd.match(/mod_\d+\.js|report\.js/g) ?? [])) touch(name);
                     }
                 }
             }
@@ -250,9 +301,9 @@ function runSession({ arm, model, rep, root }) {
         child.stderr.on("data", (c) => fs.appendFileSync(path.join(root, `${arm}-${model}-${rep}.stderr.log`), c));
         child.on("close", () => {
             log.end();
-            const t = spawnSync(process.execPath, ["--test"], { cwd: work, encoding: "utf8" });
-            const pass = Number(/# pass (\d+)/.exec(t.stdout)?.[1] ?? 0);
-            const fail = Number(/# fail (\d+)/.exec(t.stdout)?.[1] ?? 0);
+            const t = spawnSync(process.execPath, ["--test", "--test-reporter=tap", testFile], { cwd: root, encoding: "utf8" });
+            const pass = Number(/^(?:#|ℹ) pass (\d+)/m.exec(t.stdout)?.[1] ?? 0);
+            const fail = Number(/^(?:#|ℹ) fail (\d+)/m.exec(t.stdout)?.[1] ?? 0);
             m.testsPass = pass;
             m.testsFail = fail;
             m.minutes = +((Date.now() - m.started) / 60000).toFixed(1);
@@ -286,10 +337,11 @@ for (const a of ARM_NAMES) console.log(`  ${a}: compress ${JSON.stringify(ARMS[a
 
 if (!RUN) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-fixture-"));
-    writeFixture(dir, MODULES);
-    const t = spawnSync(process.execPath, ["--test"], { cwd: dir, encoding: "utf8" });
+    const testFile = path.join(dir, "hidden.test.mjs");
+    writeFixture(dir, MODULES, testFile);
+    const t = spawnSync(process.execPath, ["--test", "--test-reporter=tap", testFile], { cwd: dir, encoding: "utf8" });
     const chars = fs.readdirSync(path.join(dir, "src")).reduce((s, f) => s + fs.statSync(path.join(dir, "src", f)).size, 0);
-    console.log(`dry run: fixture ${chars} chars (~${Math.round(chars / 4)} tokens); stub tests: pass ${/# pass (\d+)/.exec(t.stdout)?.[1]} fail ${/# fail (\d+)/.exec(t.stdout)?.[1]} (expected 1 pass, 6 fail)`);
+    console.log(`dry run: fixture ${chars} chars (~${Math.round(chars / 4)} tokens); stub tests: pass ${/^(?:#|ℹ) pass (\d+)/m.exec(t.stdout)?.[1]} fail ${/^(?:#|ℹ) fail (\d+)/m.exec(t.stdout)?.[1]} (expected 1 pass, 8 fail)`);
     console.log(`fixture kept at ${dir}. Add --run to spend.`);
     process.exit(0);
 }
@@ -316,7 +368,8 @@ for (const p of plan) {
         console.log(`  $${m.cost.toFixed(3)} spent on a plain pi session`);
         break;
     }
-    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} rereads ${m.rereads} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.killed ? " (killed)" : ""}`);
+    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} rereads ${m.rereads} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
+    if (p.arm === "canary") console.log(m.compress === 0 ? "  canary OK: compress was off, so the per-arm config file is honoured" : "  CANARY FAILED: compress ran although the arm config turned it off; per-arm results are not trustworthy");
 }
 
 console.log(`\nsummary (spent $${total.toFixed(2)}), means per arm x model:`);
@@ -325,6 +378,6 @@ for (const model of MODELS) for (const arm of ARM_NAMES) {
     const rs = results.filter((r) => r.arm === arm && r.model === model);
     if (!rs.length) continue;
     const avg = (k) => rs.reduce((s, r) => s + r[k], 0) / rs.length;
-    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("rereads").toFixed(1).padStart(8)}  ${avg("testsPass").toFixed(1)}/7`);
+    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("rereads").toFixed(1).padStart(8)}  ${avg("testsPass").toFixed(1)}/9`);
 }
 console.log(`results: ${resultsFile}`);
