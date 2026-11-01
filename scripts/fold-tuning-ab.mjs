@@ -27,6 +27,7 @@
 //   baseline  upstream defaults (50k step, 3 messages / 5k tokens tail, read/bash unprotected)
 //   tail      preserveRecentTools ["read"] + preserveRecentTokens 20000
 //   tail75    tail + nudgeGrowthTokens 75000
+//   ceil90    maxContextLimit "9%" (about 90K on a 1M window) + minPressureBenefitTokens 50000
 //   canary    injectNudge off: run once and check bili.log shows ARMED-SUPPRESSED with no
 //             nudge INJECT, which proves the per-arm config file is honoured (verified
 //             2026-11-01). The pi lane always registers compress, so the model may
@@ -93,6 +94,9 @@ const ARMS = {
     tail: { preserveRecentTools: ["read"], preserveRecentTokens: 20000 },
     tail75: { preserveRecentTools: ["read"], preserveRecentTokens: 20000, nudgeGrowthTokens: 75000 },
     canary: { injectTool: false, injectNudge: false },
+    // Fold-before-the-price-line ceiling for 1M-window models: pressure nudges from about
+    // 90K, but each still needs 50K reclaimable, so it keeps the 50K rhythm without churn.
+    ceil90: { maxContextLimit: "9%", minPressureBenefitTokens: 50000 },
 };
 for (const a of ARM_NAMES) {
     if (!ARMS[a]) {
