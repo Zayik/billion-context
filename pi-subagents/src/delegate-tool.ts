@@ -372,6 +372,31 @@ function normalizeModelRef(m: string | undefined): string | undefined {
   return s.includes("/") ? s : undefined;
 }
 
+/** Model family from a model id, used to pick a cross-family delegate.
+ *  Keyed on the id, not the provider: one gateway (Copilot, OpenRouter,
+ *  Bedrock) can host several families. Unknown ids fall back to the provider
+ *  name, so two unknown models on one provider count as the same family. */
+const MODEL_FAMILIES: [RegExp, string][] = [
+  [/claude|opus|sonnet|haiku/, "anthropic"],
+  [/(^|[^a-z])(gpt|chatgpt|codex|o\d)([^a-z]|$)|^gpt/, "openai"],
+  [/gemini|gemma/, "google"],
+  [/grok/, "xai"],
+  [/llama/, "meta"],
+  [/mistral|mixtral|codestral|devstral|magistral/, "mistral"],
+  [/deepseek/, "deepseek"],
+  [/qwen|qwq/, "qwen"],
+  [/glm|zhipu/, "zhipu"],
+  [/kimi|moonshot/, "moonshot"],
+];
+
+export function modelFamily(provider: string | undefined, modelId: string | undefined): string | undefined {
+  const id = (modelId ?? "").toLowerCase();
+  for (const [re, family] of MODEL_FAMILIES) {
+    if (re.test(id)) return family;
+  }
+  return provider ? `provider:${provider.toLowerCase()}` : undefined;
+}
+
 let delegateNotifyIfRead: "skip" | "always" = "skip";
 
 export function setDelegateNotifyIfRead(mode: "skip" | "always"): void {
@@ -1860,7 +1885,8 @@ export async function buildChildArgs(
   }
   if (agentDef?.noSkills && useSession) cliArgs.push("--no-skills");
 
-  // Model: per-call > role default (delegate.agents.<role>.model) > inherit parent.
+  // Model: per-call > cross-family candidate (delegate.agents.<role>.crossFamily)
+  // > role default (delegate.agents.<role>.model) > inherit parent.
   // A role-configured model is validated against the live registry; a missing one
   // falls back to the parent model with a warning and never fails (omo lesson).
   // Per-call and inherited models pass through untouched — a per-call override is a
@@ -1871,14 +1897,48 @@ export async function buildChildArgs(
   const parentProvider = ctx.model?.provider;
   const parentModelId = ctx.model?.id;
 
+  // Cross-family candidates (delegate.agents.<role>.crossFamily): the first one
+  // that is registered and differs in family from the parent wins over the
+  // role's plain `model`. Only consulted without a per-call model.
+  let crossModel: string | undefined;
+  const crossList = Array.isArray(roleCfg?.crossFamily) ? roleCfg.crossFamily : [];
+  if (!callModel && crossList.length > 0) {
+    const parentFamily = modelFamily(parentProvider, parentModelId);
+    const registry = ctx.modelRegistry;
+    for (const raw of crossList) {
+      const ref = normalizeModelRef(typeof raw === "string" ? raw : undefined);
+      if (!ref) continue;
+      const parts = ref.split("/");
+      const p = parts[0] ?? "";
+      const m = parts.slice(1).join("/");
+      if (!registry || !registry.find(p, m)) continue;
+      if (parentFamily !== undefined && modelFamily(p, m) === parentFamily) continue;
+      crossModel = ref;
+      break;
+    }
+    if (!crossModel) {
+      logWarn("delegate", {
+        event: "cross-family-none",
+        agent: args.agent,
+        parent: parentProvider !== undefined ? `${parentProvider}/${parentModelId}` : null,
+        candidates: crossList,
+      });
+    }
+  }
+
   let provider: string | undefined;
   let modelId: string | undefined;
-  let source: "call" | "role" | "inherit" = "inherit";
+  let source: "call" | "cross" | "role" | "inherit" = "inherit";
   if (callModel) {
     const parts = callModel.split("/");
     provider = parts[0];
     modelId = parts.slice(1).join("/");
     source = "call";
+  } else if (crossModel) {
+    const parts = crossModel.split("/");
+    provider = parts[0];
+    modelId = parts.slice(1).join("/");
+    source = "cross";
   } else if (roleModel) {
     const parts = roleModel.split("/");
     provider = parts[0];
