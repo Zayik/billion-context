@@ -162,7 +162,7 @@ export class UnifiedShadow {
      *  process stops writing their JSON envelopes (persist.ts routes their
      *  saves index-only) so a multi-writer ping-pong (#394) can no longer
      *  churn the file copy; the first clean sample re-admits. */
-     readonly frozenEnvelopeIds = new Set<string>();
+    readonly frozenEnvelopeIds = new Set<string>();
     /** #5408: when (epoch ms) this process froze each session's envelope
      *  writes — feeds the status wire and the skip-save logs so a frozen
      *  session surfaces WITH an age and a reason instead of only a count. */
