@@ -27,8 +27,10 @@
 //   baseline  upstream defaults (50k step, 3 messages / 5k tokens tail, read/bash unprotected)
 //   tail      preserveRecentTools ["read"] + preserveRecentTokens 20000
 //   tail75    tail + nudgeGrowthTokens 75000
-//   canary    injectTool/injectNudge off: run once to prove the per-arm config file is
-//             honoured (expect 0 compress calls); not in the default arm list
+//   canary    injectNudge off: run once and check bili.log shows ARMED-SUPPRESSED with no
+//             nudge INJECT, which proves the per-arm config file is honoured (verified
+//             2026-11-01). The pi lane always registers compress, so the model may
+//             still call it unprompted. Not in the default arm list
 //
 // Fixture: N generated modules (~3.5k tokens each), each exporting an 8-field CONFIG
 // table, plus src/report.js with eight stubs that each need two fields from the first
@@ -38,7 +40,8 @@
 //
 // Per session it records: billed tokens (input, cache read, cache write, output),
 // pi-reported cost, turns, compress calls, reads, re-reads of an already-read module
-// (read tool or a bash command naming it), whether report.js was opened early, and
+// (read tool, or a bash command naming, brace-listing, globbing or searching across
+// modules), recovery commands after the first pass, whether report.js was opened early, and
 // how many of the 9 hidden tests pass. Results go to --out as JSONL plus a summary.
 
 import fs from "node:fs";
@@ -232,6 +235,32 @@ function armConfig(arm) {
     return { ...base, compress: { ...(base.compress ?? {}), ...ARMS[arm] } };
 }
 
+// Module files a bash command touches: literal names, brace lists (mod_{02,03}.js),
+// globs (mod_*.js, mod_0?.js), and whole-directory searches of src/ (rg/grep/cat src).
+const MOD_NAMES = Array.from({ length: MODULES }, (_, i) => `mod_${pad(i + 1)}.js`);
+function expandBraces(word) {
+    const m = /\{([^{}]*)\}/.exec(word);
+    if (!m) return [word];
+    return m[1].split(",").flatMap((alt) => expandBraces(word.slice(0, m.index) + alt + word.slice(m.index + m[0].length)));
+}
+function bashTargets(cmd) {
+    const out = new Set();
+    let named = false;
+    for (const tok of cmd.split(/[\s'"|;&()<>]+/)) {
+        for (const w of expandBraces(tok)) {
+            const base = w.replace(/\\/g, "/").split("/").pop();
+            if (base === "report.js") out.add(base);
+            if (!/^mod_/.test(base)) continue;
+            named = true;
+            const re = new RegExp("^" + base.replace(/[.+^$()|[\]]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + (base.endsWith(".js") || base.endsWith("*") ? "$" : ""));
+            for (const n of MOD_NAMES) if (re.test(n)) out.add(n);
+        }
+    }
+    // A search over the source directory with no module named reads every module.
+    if (!named && /\b(rg|grep|cat|head|sed|awk|findstr|Select-String)\b/.test(cmd) && /(^|[\s'"/])src\/?(\s|$|['"])/.test(cmd)) for (const n of MOD_NAMES) out.add(n);
+    return [...out];
+}
+
 // ─── one session ──────────────────────────────────────────────────────────────
 
 function runSession({ arm, model, rep, root }) {
@@ -246,7 +275,7 @@ function runSession({ arm, model, rep, root }) {
     const env = { ...process.env, BILI_CONFIG_FILE: cfgFile, BILI_SESSIONS_DIR: sessions };
     const piArgs = ["--mode", "json", "--no-session", "--provider", PROVIDER, "--model", model, "--no-context-files",
         ...(EXTENSION ? ["-e", path.resolve(EXTENSION)] : []), TASK(MODULES)];
-    const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, reportPeek: false, killed: false, started: Date.now() };
+    const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, recoveryCmds: 0, reportPeek: false, killed: false, started: Date.now() };
     const seen = new Set();
     const lastMod = `mod_${pad(MODULES)}.js`;
     const touch = (name) => {
@@ -293,7 +322,9 @@ function runSession({ arm, model, rep, root }) {
                         touch(path.basename(String(ev.args?.path ?? ev.args?.file_path ?? "").replace(/\\/g, "/")));
                     } else if (ev.toolName === "bash") {
                         const cmd = String(ev.args?.command ?? "");
-                        for (const name of new Set(cmd.match(/mod_\d+\.js|report\.js/g) ?? [])) touch(name);
+                        const names = bashTargets(cmd);
+                        if (names.length && seen.has(lastMod)) m.recoveryCmds++;
+                        for (const name of names) touch(name);
                     }
                 }
             }
@@ -368,16 +399,16 @@ for (const p of plan) {
         console.log(`  $${m.cost.toFixed(3)} spent on a plain pi session`);
         break;
     }
-    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} rereads ${m.rereads} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
-    if (p.arm === "canary") console.log(m.compress === 0 ? "  canary OK: compress was off, so the per-arm config file is honoured" : "  CANARY FAILED: compress ran although the arm config turned it off; per-arm results are not trustworthy");
+    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} rereads ${m.rereads} recovery ${m.recoveryCmds} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
+    if (p.arm === "canary") console.log("  canary: injectNudge is off, so bili.log should show ARMED-SUPPRESSED and no nudge INJECT for this session. compress can still run: the pi lane always registers the tool, so injectTool does not apply there.");
 }
 
 console.log(`\nsummary (spent $${total.toFixed(2)}), means per arm x model:`);
-console.log("arm      model               cost    cacheRead  cacheWrite  output  compress  rereads  tests");
+console.log("arm      model               cost    cacheRead  cacheWrite  output  compress  rereads  recovery  tests");
 for (const model of MODELS) for (const arm of ARM_NAMES) {
     const rs = results.filter((r) => r.arm === arm && r.model === model);
     if (!rs.length) continue;
     const avg = (k) => rs.reduce((s, r) => s + r[k], 0) / rs.length;
-    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("rereads").toFixed(1).padStart(8)}  ${avg("testsPass").toFixed(1)}/9`);
+    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("rereads").toFixed(1).padStart(8)} ${avg("recoveryCmds").toFixed(1).padStart(9)}  ${avg("testsPass").toFixed(1)}/9`);
 }
 console.log(`results: ${resultsFile}`);
