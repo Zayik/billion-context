@@ -2,8 +2,8 @@
 title: "What to do when billion-context compresses frequently?"
 title_zh: "billion-context频繁压缩该怎么办?"
 date: 2026-11-01
-excerpt: "Frequent compression is not automatically a bug: three steps to tell normal behavior from problems, and when to file an issue."
-excerpt_zh: "压缩频繁不等于出故障：三步分辨正常行为与异常，以及什么时候该提 issue。"
+excerpt: "Is it broken?"
+excerpt_zh: "是不是坏了"
 ---
 
 A few cases to tell apart:

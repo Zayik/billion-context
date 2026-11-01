@@ -1,8 +1,8 @@
 ---
 title: "billion-context频繁压缩该怎么办?"
 date: 2026-11-01
-excerpt: "压缩频繁不等于出故障：三步分辨正常行为与异常，以及什么时候该提 issue。"
-excerpt_zh: "压缩频繁不等于出故障：三步分辨正常行为与异常，以及什么时候该提 issue。"
+excerpt: "是不是坏了"
+excerpt_zh: "是不是坏了"
 ---
 
 区分几种情况：
