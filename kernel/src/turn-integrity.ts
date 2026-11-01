@@ -143,6 +143,90 @@ export interface IntegrityWithdrawals {
   splitPairCount: number;
 }
 
+/** Precomputed per-MESSAGE inputs of {@link computeIntegrityWithdrawals} (#5337
+ *  option A): everything that depends only on `messages`, not on `foldedIds`,
+ *  is an O(n) pass repeated for every screened unit — hoisting it to one
+ *  build-per-turn cuts the dominant term of the O(n²) recommend screening.
+ *  Build via {@link buildIntegrityPre}; omit the parameter to compute inline
+ *  (single-call paths keep the legacy behavior). */
+export interface IntegrityPre {
+  reasoningIds: Set<string>;
+  callIds: Set<string>;
+  /** The tool-call messages themselves (id present) — the fixed-point pair
+   *  loop iterates these instead of re-scanning ALL messages per pass. */
+  callMessages: CoreMessage[];
+  callIdByMessageId: Map<string, string>;
+  resultIdByCallId: Map<string, string>;
+  groups: string[][];
+  /** INV3 (#4885) signed assistant runs, see computeSignedRuns. */
+  signedRuns: string[][];
+}
+
+/** #4885: maximal runs of consecutive assistant-role messages that carry at
+ *  least one signed thinking-family block. Rebuild merges each run into ONE
+ *  provider message, so a partially folded run desynchronizes the signature
+ *  from its context. Tool results (role "tool") break runs by construction. */
+function computeSignedRuns(messages: CoreMessage[]): string[][] {
+  const signedRuns: string[][] = [];
+  let i = 0;
+  while (i < messages.length) {
+    if (messages[i]!.role !== "assistant") {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < messages.length && messages[j + 1]!.role === "assistant")
+      j++;
+    let signed = false;
+    for (let k = i; k <= j && !signed; k++)
+      signed = isSignedThinkingFamily(messages[k]!);
+    if (signed) {
+      const members: string[] = [];
+      for (let k = i; k <= j; k++) {
+        const id = messages[k]!.id;
+        if (id) members.push(id);
+      }
+      signedRuns.push(members);
+    }
+    i = j + 1;
+  }
+  return signedRuns;
+}
+
+/** One-pass build of {@link IntegrityPre} for a message array. */
+export function buildIntegrityPre(messages: CoreMessage[]): IntegrityPre {
+  const reasoningIds = new Set<string>();
+  const callIds = new Set<string>();
+  const callMessages: CoreMessage[] = [];
+  const callIdByMessageId = new Map<string, string>();
+  const resultIdByCallId = new Map<string, string>();
+  for (const m of messages) {
+    if (!m.id) continue;
+    if (m.contentType === "reasoning") reasoningIds.add(m.id);
+    if (m.role === "assistant" && m.contentType === "tool-call") {
+      callIds.add(m.id);
+      callMessages.push(m);
+      if (typeof m.toolCallId === "string") {
+        callIdByMessageId.set(m.id, m.toolCallId);
+      }
+    }
+    if (m.contentType === "tool-result" && typeof m.toolCallId === "string") {
+      if (!resultIdByCallId.has(m.toolCallId)) {
+        resultIdByCallId.set(m.toolCallId, m.id);
+      }
+    }
+  }
+  return {
+    reasoningIds,
+    callIds,
+    callMessages,
+    callIdByMessageId,
+    resultIdByCallId,
+    groups: computeTurnGroups(messages),
+    signedRuns: computeSignedRuns(messages),
+  };
+}
+
 /**
  * Fold-integrity gate (#684): given the ids a fold removes from the visible
  * stream, return the ids that must stay visible instead.
@@ -173,63 +257,21 @@ export interface IntegrityWithdrawals {
 export function computeIntegrityWithdrawals(
   messages: CoreMessage[],
   foldedIds: ReadonlySet<string>,
+  pre?: IntegrityPre,
 ): IntegrityWithdrawals {
   const remaining = new Set(foldedIds);
   const withdrawn = new Set<string>();
   const handledTurns = new Set<number>();
   const handledPairs = new Set<string>();
 
-  const reasoningIds = new Set<string>();
-  const callIds = new Set<string>();
-  const callIdByMessageId = new Map<string, string>();
-  const resultIdByCallId = new Map<string, string>();
-  for (const m of messages) {
-    if (!m.id) continue;
-    if (m.contentType === "reasoning") reasoningIds.add(m.id);
-    if (m.role === "assistant" && m.contentType === "tool-call") {
-      callIds.add(m.id);
-      if (typeof m.toolCallId === "string") {
-        callIdByMessageId.set(m.id, m.toolCallId);
-      }
-    }
-    if (m.contentType === "tool-result" && typeof m.toolCallId === "string") {
-      if (!resultIdByCallId.has(m.toolCallId)) {
-        resultIdByCallId.set(m.toolCallId, m.id);
-      }
-    }
-  }
+  const built = pre ?? buildIntegrityPre(messages);
+  const reasoningIds = built.reasoningIds;
+  const callIds = built.callIds;
+  const callIdByMessageId = built.callIdByMessageId;
+  const resultIdByCallId = built.resultIdByCallId;
+  const groups = built.groups;
 
-  const groups = computeTurnGroups(messages);
-
-  // #4885: maximal runs of consecutive assistant-role messages that carry at
-  // least one signed thinking-family block. Rebuild merges each run into ONE
-  // provider message, so a partially folded run desynchronizes the signature
-  // from its context. Tool results (role "tool") break runs by construction.
-  const signedRuns: string[][] = [];
-  {
-    let i = 0;
-    while (i < messages.length) {
-      if (messages[i]!.role !== "assistant") {
-        i++;
-        continue;
-      }
-      let j = i;
-      while (j + 1 < messages.length && messages[j + 1]!.role === "assistant")
-        j++;
-      let signed = false;
-      for (let k = i; k <= j && !signed; k++)
-        signed = isSignedThinkingFamily(messages[k]!);
-      if (signed) {
-        const members: string[] = [];
-        for (let k = i; k <= j; k++) {
-          const id = messages[k]!.id;
-          if (id) members.push(id);
-        }
-        signedRuns.push(members);
-      }
-      i = j + 1;
-    }
-  }
+  const signedRuns = built.signedRuns;
   const handledSignedRuns = new Set<number>();
   let signedRunWithdrawals = 0;
 
@@ -277,8 +319,7 @@ export function computeIntegrityWithdrawals(
       changed = true;
     }
 
-    for (const m of messages) {
-      if (!m.id || !callIds.has(m.id)) continue;
+    for (const m of built.callMessages) {
       const callId = callIdByMessageId.get(m.id);
       if (callId === undefined || handledPairs.has(callId)) continue;
       const resultId = resultIdByCallId.get(callId);
