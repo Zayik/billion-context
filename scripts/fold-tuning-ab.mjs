@@ -164,16 +164,20 @@ function moduleSource(i, targetChars = 14000) {
     return out;
 }
 
-// Eight stubs over fields of the first ~12 modules (folded by the time they are written).
+// Eight stubs. part1-4 use the first ~12 modules (folded under every arm); part5-8 use
+// the last ~8 modules before the end (inside a 20k verbatim tail, but foldable under
+// baseline's 5k tail), so the "recent" parts test what the tail setting protects.
 const FIELDS = ["code", "factor", "region", "limit", "ratio", "owner", "tier", "salt"];
 function reportTasks(n) {
     const r = rng(4242);
     const span = Math.min(12, n);
+    const recentLo = Math.max(1, n - 7);
     const out = [];
     for (let k = 0; k < 8; k++) {
-        const a = 1 + Math.floor(r() * span);
-        let b = 1 + Math.floor(r() * span);
-        if (b === a) b = 1 + (b % span);
+        const lo = k < 4 ? 1 : recentLo, width = k < 4 ? span : n - recentLo + 1;
+        const a = lo + Math.floor(r() * width);
+        let b = lo + Math.floor(r() * width);
+        if (b === a) b = lo + ((b - lo + 1) % width);
         const fa = FIELDS[Math.floor(r() * FIELDS.length)];
         const fb = FIELDS[Math.floor(r() * FIELDS.length)];
         out.push({
@@ -241,7 +245,11 @@ const MOD_NAMES = Array.from({ length: MODULES }, (_, i) => `mod_${pad(i + 1)}.j
 function expandBraces(word) {
     const m = /\{([^{}]*)\}/.exec(word);
     if (!m) return [word];
-    return m[1].split(",").flatMap((alt) => expandBraces(word.slice(0, m.index) + alt + word.slice(m.index + m[0].length)));
+    const range = /^(\d+)\.\.(\d+)$/.exec(m[1]);
+    const alts = range
+        ? Array.from({ length: Math.abs(+range[2] - +range[1]) + 1 }, (_, i) => String(Math.min(+range[1], +range[2]) + i).padStart(range[1].length, "0"))
+        : m[1].split(",");
+    return alts.flatMap((alt) => expandBraces(word.slice(0, m.index) + alt + word.slice(m.index + m[0].length)));
 }
 function bashTargets(cmd) {
     const out = new Set();
@@ -280,12 +288,18 @@ function runSession({ arm, model, rep, root }) {
     const env = { ...process.env, BILI_CONFIG_FILE: cfgFile, BILI_SESSIONS_DIR: sessions, XDG_STATE_HOME: state };
     const piArgs = ["--mode", "json", "--no-session", "--provider", PROVIDER, "--model", model, "--no-context-files",
         ...(EXTENSION ? ["-e", path.resolve(EXTENSION)] : []), TASK(MODULES)];
-    const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, recoveryCmds: 0, reportPeek: false, killed: false, started: Date.now() };
+    const m = { arm, model, rep, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, turns: 0, compress: 0, reads: 0, rereads: 0, recoveryCmds: 0, wentBackEarly: false, wentBackRecent: false, reportPeek: false, killed: false, started: Date.now() };
     const seen = new Set();
     let summaries = "";
     const lastMod = `mod_${pad(MODULES)}.js`;
+    const recentLo = Math.max(1, MODULES - 7);
     const touch = (name) => {
         if (/^mod_\d+\.js$/.test(name)) {
+            if (seen.has(lastMod) && name !== lastMod) {
+                // Went back to a module after the first full pass: the yes/no signal.
+                if (Number(name.slice(4, 6)) >= recentLo) m.wentBackRecent = true;
+                else m.wentBackEarly = true;
+            }
             if (seen.has(name)) m.rereads++;
             seen.add(name);
         } else if (name === "report.js" && !seen.has(lastMod)) m.reportPeek = true;
@@ -346,6 +360,9 @@ function runSession({ arm, model, rep, root }) {
             const fail = Number(/^(?:#|ℹ) fail (\d+)/m.exec(t.stdout)?.[1] ?? 0);
             m.testsPass = pass;
             m.testsFail = fail;
+            m.failedParts = [...t.stdout.matchAll(/^not ok \d+ - (part\d+)/gm)].map((x) => x[1]);
+            m.earlyPass = 4 - m.failedParts.filter((x) => Number(x.slice(4)) <= 4).length;
+            m.recentPass = 4 - m.failedParts.filter((x) => Number(x.slice(4)) > 4).length;
             m.minutes = +((Date.now() - m.started) / 60000).toFixed(1);
             // Validity: this session's own sessions dir has data, its own bili.log exists,
             // and the logged nudge interval matches the arm (proves its config was used).
@@ -430,16 +447,16 @@ for (const p of plan) {
         console.log(`  $${m.cost.toFixed(3)} spent on a plain pi session`);
         break;
     }
-    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} kept ${m.keptValues}/16 rereads ${m.rereads} recovery ${m.recoveryCmds} nudges ${m.nudgeInject} interval ${m.interval} tests ${m.testsPass}/${m.testsPass + m.testsFail}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
+    console.log(`  $${m.cost.toFixed(3)} turns ${m.turns} compress ${m.compress} reads ${m.reads} kept ${m.keptValues}/16 rereads ${m.rereads} recovery ${m.recoveryCmds} nudges ${m.nudgeInject} interval ${m.interval} tests ${m.testsPass}/${m.testsPass + m.testsFail} early ${m.earlyPass}/4 recent ${m.recentPass}/4 back ${m.wentBackEarly ? "E" : "-"}${m.wentBackRecent ? "R" : "-"}${m.failedParts.length ? " failed " + m.failedParts.join(",") : ""}${m.reportPeek ? " (opened report.js early)" : ""}${m.killed ? " (killed)" : ""}`);
     if (p.arm === "canary") console.log("  canary: injectNudge is off, so bili.log should show ARMED-SUPPRESSED and no nudge INJECT for this session. compress can still run: the pi lane always registers the tool, so injectTool does not apply there.");
 }
 
 console.log(`\nsummary (spent $${total.toFixed(2)}), means per arm x model:`);
-console.log("arm      model               cost    cacheRead  cacheWrite  output  compress  kept/16  rereads  recovery  tests");
+console.log("arm      model               cost    cacheRead  cacheWrite  output  compress  kept/16  rereads  recovery  tests  early/4  recent/4  backEarly  backRecent");
 for (const model of MODELS) for (const arm of ARM_NAMES) {
     const rs = results.filter((r) => r.arm === arm && r.model === model);
     if (!rs.length) continue;
     const avg = (k) => rs.reduce((s, r) => s + r[k], 0) / rs.length;
-    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("keptValues").toFixed(1).padStart(8)} ${avg("rereads").toFixed(1).padStart(8)} ${avg("recoveryCmds").toFixed(1).padStart(9)}  ${avg("testsPass").toFixed(1)}/9`);
+    console.log(`${arm.padEnd(8)} ${model.padEnd(18)} $${avg("cost").toFixed(3).padStart(6)} ${String(Math.round(avg("cacheRead"))).padStart(10)} ${String(Math.round(avg("cacheWrite"))).padStart(11)} ${String(Math.round(avg("output"))).padStart(7)} ${avg("compress").toFixed(1).padStart(9)} ${avg("keptValues").toFixed(1).padStart(8)} ${avg("rereads").toFixed(1).padStart(8)} ${avg("recoveryCmds").toFixed(1).padStart(9)}  ${avg("testsPass").toFixed(1)}/9  ${avg("earlyPass").toFixed(1).padStart(7)} ${avg("recentPass").toFixed(1).padStart(8)} ${(rs.filter((x) => x.wentBackEarly).length + "/" + rs.length).padStart(10)} ${(rs.filter((x) => x.wentBackRecent).length + "/" + rs.length).padStart(11)}`);
 }
 console.log(`results: ${resultsFile}`);
