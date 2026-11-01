@@ -20,7 +20,7 @@ import { log as loggerLog } from "./logger.js";
  *  actively saving moments ago — silence afterwards is abnormal. */
 export const HOT_ATTACH_WINDOW_MS = 10 * 60_000;
 /** How long a hot-at-attach session may stay silent before we alarm. */
-export const ATTACH_SILENCE_MS = 5 * 60_000;
+const ATTACH_SILENCE_MS = 5 * 60_000;
 
 let attachSilenceMs = ATTACH_SILENCE_MS;
 
