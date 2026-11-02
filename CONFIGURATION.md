@@ -854,8 +854,10 @@ Top-level keys that control how the proxy listens and behaves globally.
     "asyncTimeoutMinutes": 30,   // hard limit for async delegates; 0/null disables
     "maxConcurrent": 3,          // cap on concurrent background delegates (default 3; extras queue)
     "thinkingLevel": "medium",   // off|minimal|low|medium|high|xhigh|max; priority per-call > role > this > pi default
-    "agents": {                  // per-role defaults: { model: "provider/id", thinkingLevel: "…" }
-      "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" }
+    "agents": {                  // per-role defaults: { model: "provider/id", thinkingLevel: "…", crossFamily: [...] }
+      "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" },
+      // crossFamily: first registered candidate whose model family differs from the main agent's wins over model
+      "researcher": { "crossFamily": ["anthropic/claude-haiku-4-5", "openai/gpt-5-mini"] }
     },
     "notifyIfRead": "skip",      // "skip" — no completion nudge if the model already read the result file
     "fleetShortcut": "ctrl+alt+d", // "" disables the keyboard shortcut (/acp-fleet still works)

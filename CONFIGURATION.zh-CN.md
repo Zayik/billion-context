@@ -854,7 +854,7 @@
     "asyncTimeoutMinutes": 30,   // 异步 delegate 硬时限；0/null 关闭
     "maxConcurrent": 3,          // 后台并发上限（默认 3；超出排队）
     "thinkingLevel": "medium",   // off|minimal|low|medium|high|xhigh|max；优先级 每次调用 > 角色 > 此处 > pi 默认
-    "agents": {                  // 角色默认：{ model: "provider/id", thinkingLevel: "…" }
+    "agents": {                  // 角色默认：{ model: "provider/id", thinkingLevel: "…", crossFamily: [...] }
       "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" }
     },
     "notifyIfRead": "skip",      // "skip" —— 模型已读结果文件则不再补发完成通知
