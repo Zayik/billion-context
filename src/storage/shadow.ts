@@ -1108,7 +1108,16 @@ export class UnifiedShadow {
                 } catch {
                     applied = false;
                 }
-                if (!applied) await backend.ingestSession(planIngest(legacy), undefined, { completeLog: hasRawTail });
+                // #5412: mirror the sync path's latched-sweep promotion (#5408
+                // B1 / #4323). While the sampler has latched this session as
+                // drift-latched, the envelope is the view loadSync serves —
+                // the full re-ingest must claim authoritative-set authority
+                // even without a raw tail so its stale sweep retires foreign
+                // residue rows; otherwise every latched save re-takes the
+                // incomplete view, the next sample drifts again, and the
+                // frozen session never self-heals.
+                const completeLog = hasRawTail || this.driftedSessions.has(legacy.id);
+                if (!applied) await backend.ingestSession(planIngest(legacy), undefined, { completeLog });
                 this.stats.ingests++;
                 const count = (this.ingestCounts.get(legacy.id) ?? 0) + 1;
                 this.ingestCounts.set(legacy.id, count);
