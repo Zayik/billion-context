@@ -114,7 +114,6 @@ pi install npm:billion-context-pi-subagents
 | `delegate.maxConcurrent` | number | unlimited | 并发后台委托数量上限（`1` = 严格串行；超出部分排队）。无效值回退为无限制并发并给出警告。环境变量：`PI_ACP_DELEGATE_MAX_CONCURRENT`。 |
 | `delegate.thinkingLevel` | string | unset | 全局默认思考级别（off\|minimal\|low\|medium\|high\|xhigh\|max）。优先级：单次调用 > 角色 > 全局 > Pi 默认值。 |
 | `delegate.agents` | object | unset | 按角色设置默认值：`{ "<role>": { "model": "provider/id", "thinkingLevel": "…" } }`。无效模型回退到父模型并给出警告（不会导致失败）。 |
-| `delegate.agents.<role>.crossFamily` | string[] | unset | 候选 `"provider/id"` 模型（按优先级排列），用于需要与主代理使用不同模型家族的角色（例如独立审查者）。第一个已注册且家族与父模型不同的候选优先于该角色的 `model`；都不满足时依次回退到 `model`、父模型。家族按模型 id 判断（claude、gpt/o 系列、gemini 等），而非 provider。单次调用的 `model` 仍然优先。 |
 | `delegate.notifyIfRead` | `"skip" \| "always"` | `"skip"` | 若模型在运行结束后已读取结果文件，则跳过完成通知。 |
 | `delegate.fleetShortcut` | string | `"ctrl+alt+d"` | fleet 检查器的 TUI 快捷键。`""` 禁用键盘注册（`/acp-fleet` 仍然可用）。已从 `ctrl+alt+f` 移开，因为 pi-subagents 也占用了该组合键（#412）。 |
 | `delegatePrompt` | string \| null | built-in | 替换（字符串）或移除（`null`）系统提示词附录中的 `ACP_DELEGATE NOTIFICATIONS` 部分。 |

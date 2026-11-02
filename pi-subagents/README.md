@@ -89,10 +89,7 @@ or object form:
     "forceEnable": false,
     "fleetShortcut": "ctrl+alt+d",
     "agents": {
-      "reviewer": {
-        "crossFamily": ["anthropic/claude-sonnet-4-5", "openai/gpt-5"],
-        "thinkingLevel": "high"
-      },
+      "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" },
       "worker":   { "model": "zhipu/glm-4.7" }
     }
   }
@@ -112,7 +109,6 @@ or object form:
 | `delegate.maxConcurrent` | number | `3` | Cap on concurrent background delegates (`1` = strict serial; extras queue). Invalid values fall back to the default with a warning. Env: `PI_ACP_DELEGATE_MAX_CONCURRENT`. |
 | `delegate.thinkingLevel` | string | unset | Global default thinking level (off\|minimal\|low\|medium\|high\|xhigh\|max). Priority: per-call > role > global > Pi default. |
 | `delegate.agents` | object | unset | Per-role defaults: `{ "<role>": { "model": "provider/id", "thinkingLevel": "…" } }`. Invalid models fall back to the parent model with a warning (never fail). |
-| `delegate.agents.<role>.crossFamily` | string[] | unset | Candidate `"provider/id"` models, in preference order, for a role that should run on a different model family than the main agent (an independent reviewer whose blind spots differ from the author's). The first candidate that is registered and differs in family from the parent model wins over the role's `model`; if none qualifies, resolution falls through to `model`, then the parent. Family is read from the model id (claude, gpt/o-series, gemini, ...), not the provider, so Copilot-hosted Claude and GPT are different families. A per-call `model` still wins. |
 | `delegate.notifyIfRead` | `"skip" \| "always"` | `"skip"` | Skip the completion notification when the model already read the result file after the run finished. |
 | `delegate.fleetShortcut` | string | `"ctrl+alt+d"` | TUI shortcut for the fleet inspector. `""` disables keyboard registration (`/acp-fleet` still works). Moved off `ctrl+alt+f`, which pi-subagents also claims (#412). |
 | `delegatePrompt` | string \| null | built-in | Replace (string) or remove (`null`) the `ACP_DELEGATE NOTIFICATIONS` system-prompt appendix. |

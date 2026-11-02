@@ -865,6 +865,15 @@
 }
 ```
 
+**跨家族角色（`agents.<role>.crossFamily`）。** 候选 `"provider/id"` 模型列表（按优先级排列），用于需要与主代理使用不同模型家族的角色，例如独立审查者。启动时，第一个已注册且家族与主代理不同的候选优先于该角色的 `model`；都不满足时依次回退到 `model`、主代理模型。家族按模型 id 判断（claude、gpt/o 系列、gemini、grok、llama、mistral、deepseek、qwen、glm、kimi），而非 provider，所以 Copilot 托管的 Claude 与 GPT 属于不同家族。单次调用的 `model` 仍然优先。
+
+```jsonc
+// ~/.config/billion-context/billion-context.json
+"pi": { "subagents": { "agents": {
+  "reviewer": { "crossFamily": ["github-copilot/claude-sonnet-5.5", "github-copilot/gpt-6.1-terra"], "thinkingLevel": "high" }
+} } }
+```
+
 **环境变量覆盖**（进程级 spawn 通道，随子代理子进程传播；`PI_ACP_DELEGATE_*` > `pi.subagents` > 已废弃 acp.json > 默认）：
 
 | 环境变量 | 覆盖 | 说明 |
