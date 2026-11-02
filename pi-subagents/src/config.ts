@@ -24,6 +24,17 @@ export interface DelegateRoleConfig {
    *  default > global `delegate.thinkingLevel` > Pi's own default. An invalid
    *  value is ignored with a warning (never fails). */
   thinkingLevel?: string;
+  /** Candidate models (`"provider/id"`, in preference order) for a role that
+   *  should run on a different model family than the main agent, such as an
+   *  independent reviewer. At spawn time the first candidate that exists in
+   *  the live registry and whose family differs from the parent model's wins,
+   *  ahead of `model`. When no candidate qualifies (all share the parent's
+   *  family, or none is registered) resolution falls through to `model`, then
+   *  the parent model. Family comes from the model id (claude -> anthropic,
+   *  gpt/o-series -> openai, gemini -> google, ...), not the provider, so a
+   *  Copilot-hosted Claude and a Copilot-hosted GPT count as different
+   *  families. A per-call `model` still wins over this. */
+  crossFamily?: string[];
 }
 
 /** Delegate sub-agent configuration. */

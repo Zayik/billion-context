@@ -1770,7 +1770,7 @@ export interface PiSubagentsFileConfig {
     thinkingLevel?: string;
     /** Per-role defaults keyed by role (reviewer/researcher/worker or
      *  custom): { model: "provider/id", thinkingLevel: "…" }. */
-    agents?: Record<string, { model?: string; thinkingLevel?: string }>;
+    agents?: Record<string, { model?: string; thinkingLevel?: string; crossFamily?: string[] }>;
     /** "skip" (default) — suppress the completion notification when the
      *  model already read the result file; "always" — always inject. */
     notifyIfRead?: "skip" | "always";

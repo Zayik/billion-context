@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, delegationAllowedAtDepth, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, formatCompletedPayload, INLINE_RESULT_CHARS, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot } from "../src/delegate-tool.js";
+import { buildChildArgs, delegateSpawnOptions, injectedWaitMessage, buildWaitResult, buildCancelResult, getDelegateUsage, resetDelegateUsage, injectResult, effectiveExitCode, formatRunResult, resolveWaitTimeoutMs, findUndeliveredRuns, undeliveredNoticeFrom, buildRecoveryNotice, makeDelegateTool, exitLabel, cancelledFileNote, delegateStdinText, readActivityTail, scheduleRunNotification, flushDelegateNotifications, formatBatchRunSection, setDelegatePolicy, delegateChildEnv, asyncWatchdogDescription, ConcurrencyGate, delegationAllowedAtDepth, setDelegateDefaults, resetDelegateDefaults, isValidThinkingLevel, resolvePerCallTimeoutMs, addDelegateUsage, emitInlineUsageNote, formatCompletedPayload, INLINE_RESULT_CHARS, makeDelegateWaitTool, makeDelegateCancelTool, runningRunsSnapshot, modelFamily } from "../src/delegate-tool.js";
 import { DEFAULT_DELEGATE_POLICY, resolveDelegate } from "../src/config.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -1407,3 +1407,73 @@ test("acp_delegate_wait timeout on a running run reports neutral text and leaves
   }
 });
 
+
+// ─── cross-family role candidates ──────────────────────────────────────────
+
+test("modelFamily reads the family from the model id, not the provider", () => {
+  assert.equal(modelFamily("github-copilot", "claude-haiku-5.5"), "anthropic");
+  assert.equal(modelFamily("github-copilot", "gpt-6-luna"), "openai");
+  assert.equal(modelFamily("openai", "o3-mini"), "openai");
+  assert.equal(modelFamily("google", "gemini-2.5-pro"), "google");
+  assert.equal(modelFamily("anthropic", "claude-opus-5-5"), "anthropic");
+  assert.equal(modelFamily("acme", "mystery-1"), "provider:acme");
+});
+
+test("buildChildArgs crossFamily: picks first registered candidate of another family", async () => {
+  resetDelegateDefaults();
+  setDelegateDefaults({ agents: { reviewer: {
+    model: "copilot/gpt-6-luna",
+    crossFamily: ["copilot/gpt-6.1-terra", "copilot/claude-opus-5.5", "copilot/claude-haiku-5.5"],
+  } } });
+  const { cliArgs } = await buildChildArgs(
+    { agent: "reviewer", task: "t" },
+    "prompt",
+    ctxWithRegistry({ provider: "copilot", id: "gpt-6.1-terra" }, ["copilot/gpt-6.1-terra", "copilot/claude-opus-5.5", "copilot/claude-haiku-5.5", "copilot/gpt-6-luna"]),
+    "del_x1",
+  );
+  assert.equal(flagVal(cliArgs, "--provider"), "copilot");
+  assert.equal(flagVal(cliArgs, "--model"), "claude-opus-5.5");
+});
+
+test("buildChildArgs crossFamily: flips when the main agent switches family", async () => {
+  resetDelegateDefaults();
+  setDelegateDefaults({ agents: { reviewer: {
+    crossFamily: ["copilot/claude-opus-5.5", "copilot/gpt-6.1-terra"],
+  } } });
+  const { cliArgs } = await buildChildArgs(
+    { agent: "reviewer", task: "t" },
+    "prompt",
+    ctxWithRegistry({ provider: "copilot", id: "claude-opus-5.5" }, ["copilot/claude-opus-5.5", "copilot/gpt-6.1-terra"]),
+    "del_x2",
+  );
+  assert.equal(flagVal(cliArgs, "--model"), "gpt-6.1-terra");
+});
+
+test("buildChildArgs crossFamily: skips unregistered candidates, falls to role model, then parent", async () => {
+  resetDelegateDefaults();
+  setDelegateDefaults({ agents: { reviewer: {
+    model: "copilot/gpt-6-luna",
+    crossFamily: ["ghost/claude-nope", "copilot/gpt-6.1-terra"],
+  } } });
+  const ctx = ctxWithRegistry({ provider: "copilot", id: "gpt-6.1-terra" }, ["copilot/gpt-6.1-terra", "copilot/gpt-6-luna"]);
+  const a = await buildChildArgs({ agent: "reviewer", task: "t" }, "prompt", ctx, "del_x3");
+  assert.equal(flagVal(a.cliArgs, "--model"), "gpt-6-luna");
+
+  resetDelegateDefaults();
+  setDelegateDefaults({ agents: { reviewer: { crossFamily: ["copilot/gpt-6-luna"] } } });
+  const b = await buildChildArgs({ agent: "reviewer", task: "t" }, "prompt", ctx, "del_x4");
+  assert.equal(flagVal(b.cliArgs, "--model"), "gpt-6.1-terra");
+});
+
+test("buildChildArgs crossFamily: per-call model still wins", async () => {
+  resetDelegateDefaults();
+  setDelegateDefaults({ agents: { reviewer: { crossFamily: ["copilot/claude-opus-5.5"] } } });
+  const { cliArgs } = await buildChildArgs(
+    { agent: "reviewer", task: "t", model: "copilot/gpt-6-luna" },
+    "prompt",
+    ctxWithRegistry({ provider: "copilot", id: "gpt-6.1-terra" }, ["copilot/claude-opus-5.5"]),
+    "del_x5",
+  );
+  assert.equal(flagVal(cliArgs, "--model"), "gpt-6-luna");
+  resetDelegateDefaults();
+});

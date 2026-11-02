@@ -854,7 +854,7 @@ Top-level keys that control how the proxy listens and behaves globally.
     "asyncTimeoutMinutes": 30,   // hard limit for async delegates; 0/null disables
     "maxConcurrent": 3,          // cap on concurrent background delegates (default 3; extras queue)
     "thinkingLevel": "medium",   // off|minimal|low|medium|high|xhigh|max; priority per-call > role > this > pi default
-    "agents": {                  // per-role defaults: { model: "provider/id", thinkingLevel: "…" }
+    "agents": {                  // per-role defaults: { model: "provider/id", thinkingLevel: "…", crossFamily: [...] }
       "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinkingLevel": "high" }
     },
     "notifyIfRead": "skip",      // "skip" — no completion nudge if the model already read the result file
@@ -863,6 +863,15 @@ Top-level keys that control how the proxy listens and behaves globally.
     "debug": false               // debug events in ~/.pi/acp.log, scoped to sub-agents
   }
 }
+```
+
+**Cross-family roles (`agents.<role>.crossFamily`).** A list of candidate `"provider/id"` models in preference order, for a role that should run on a different model family than the main agent, such as an independent reviewer whose blind spots differ from the author's. At spawn the first candidate that is registered and whose family differs from the main agent's wins over the role's `model`. If none qualifies, resolution falls through to `model`, then the main agent's model. Family is read from the model id (claude, gpt/o-series, gemini, grok, llama, mistral, deepseek, qwen, glm, kimi), not the provider, so a Copilot-hosted Claude and a Copilot-hosted GPT are different families. A per-call `model` still wins. Example: with a Terra main agent this reviewer runs on Sonnet; with a Claude main agent it runs on Terra.
+
+```jsonc
+// ~/.config/billion-context/billion-context.json
+"pi": { "subagents": { "agents": {
+  "reviewer": { "crossFamily": ["github-copilot/claude-sonnet-5.5", "github-copilot/gpt-6.1-terra"], "thinkingLevel": "high" }
+} } }
 ```
 
 **Env overrides** (per-process spawn channels, propagate to delegate children; `PI_ACP_DELEGATE_*` > `pi.subagents` > deprecated acp.json > default):

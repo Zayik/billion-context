@@ -403,3 +403,8 @@ test("PI_ACP_DELEGATE_* env beats pi.subagents file values, which beat defaults 
         clearBiliConfig();
     }
 });
+
+test("piSubagentsAdapter carries agents.<role>.crossFamily from billion-context.json", () => {
+    const agents = { reviewer: { crossFamily: ["copilot/claude-sonnet-5.5", "copilot/gpt-6.1-terra"], thinkingLevel: "high" } };
+    assert.deepEqual(piSubagentsAdapter({ agents }), { delegate: { agents } });
+});
