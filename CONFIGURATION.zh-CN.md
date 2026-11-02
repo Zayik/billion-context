@@ -870,7 +870,11 @@
 ```jsonc
 // ~/.config/billion-context/billion-context.json
 "pi": { "subagents": { "agents": {
-  "reviewer": { "crossFamily": ["github-copilot/claude-sonnet-5.5", "github-copilot/gpt-6.1-terra"], "thinkingLevel": "high" }
+  // 每个家族（Claude、GPT、Gemini）列一个候选；未注册的 id 会被跳过，可列出你可能用到的所有 provider
+  "reviewer":   { "crossFamily": ["github-copilot/claude-sonnet-5.5", "github-copilot/gpt-6.1-terra", "github-copilot/gemini-3.1-pro",
+                                  "anthropic/claude-sonnet-5-5", "openai/gpt-6.1-terra", "google/gemini-3.1-pro"], "thinkingLevel": "high" },
+  "researcher": { "crossFamily": ["github-copilot/claude-haiku-5.5", "github-copilot/gpt-6-luna", "github-copilot/gemini-3.8-flash",
+                                  "anthropic/claude-haiku-5-5", "openai/gpt-6-luna", "google/gemini-3.8-flash"], "thinkingLevel": "medium" }
 } } }
 ```
 

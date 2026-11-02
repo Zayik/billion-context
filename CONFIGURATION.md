@@ -870,7 +870,11 @@ Top-level keys that control how the proxy listens and behaves globally.
 ```jsonc
 // ~/.config/billion-context/billion-context.json
 "pi": { "subagents": { "agents": {
-  "reviewer": { "crossFamily": ["github-copilot/claude-sonnet-5.5", "github-copilot/gpt-6.1-terra"], "thinkingLevel": "high" }
+  // one strong candidate per family (Claude, GPT, Gemini); unregistered ids are skipped, so list every provider you might use
+  "reviewer":   { "crossFamily": ["github-copilot/claude-sonnet-5.5", "github-copilot/gpt-6.1-terra", "github-copilot/gemini-3.1-pro",
+                                  "anthropic/claude-sonnet-5-5", "openai/gpt-6.1-terra", "google/gemini-3.1-pro"], "thinkingLevel": "high" },
+  "researcher": { "crossFamily": ["github-copilot/claude-haiku-5.5", "github-copilot/gpt-6-luna", "github-copilot/gemini-3.8-flash",
+                                  "anthropic/claude-haiku-5-5", "openai/gpt-6-luna", "google/gemini-3.8-flash"], "thinkingLevel": "medium" }
 } } }
 ```
 
